@@ -86,7 +86,7 @@ jobs:
       OCTOPUS_SERVICE_ACCOUNT: 'your-service-account-id'  # TODO: update to your service account Id
       OCTOPUS_SPACE: 'your-space'                         # TODO: update to the name of the space your project is configured in
       OCTOPUS_PROJECT: 'your-project'                     # TODO: update to the name of your Octopus project
-      OCTOPUS_ENVIRONMENT: 'your-environment'             # TODO: update to the name of the environment to recieve the first deployment
+      OCTOPUS_ENVIRONMENT: 'your-environment'             # TODO: update to the name of the environment to receive the first deployment
 
     steps:
       - name: Log in to Octopus Deploy
