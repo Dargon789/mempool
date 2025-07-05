@@ -39,7 +39,20 @@ class AccelerationRoutes {
   }
 
   private async $getAcceleratorAccelerationsHistoryAggregated(req: Request, res: Response): Promise<void> {
-    const url = `${config.MEMPOOL_SERVICES.API}/${req.originalUrl.replace('/api/v1/services/', '')}`;
+    const allowedPaths = {
+      'accelerations': 'accelerations',
+      'accelerations/history': 'accelerations/history',
+      'accelerations/stats': 'accelerations/stats',
+      'estimate': 'estimate',
+    };
+    const userPath = req.originalUrl.replace('/api/v1/services/', '');
+    const safePath = allowedPaths[userPath];
+    if (!safePath) {
+      logger.err(`Invalid path requested: ${userPath}`, this.tag);
+      res.status(400).send({ error: 'Invalid path' });
+      return;
+    }
+    const url = `${config.MEMPOOL_SERVICES.API}/${safePath}`;
     try {
       const response = await axios.get(url, { responseType: 'stream', timeout: 10000 });
       for (const key in response.headers) {
@@ -67,7 +80,20 @@ class AccelerationRoutes {
   }
 
   private async $getAcceleratorEstimate(req: Request, res: Response): Promise<void> {
-    const url = `${config.MEMPOOL_SERVICES.API}/${req.originalUrl.replace('/api/v1/services/', '')}`;
+    const allowedPaths = {
+      'accelerations': 'accelerations',
+      'accelerations/history': 'accelerations/history',
+      'accelerations/stats': 'accelerations/stats',
+      'estimate': 'estimate',
+    };
+    const userPath = req.originalUrl.replace('/api/v1/services/', '');
+    const safePath = allowedPaths[userPath];
+    if (!safePath) {
+      logger.err(`Invalid path requested: ${userPath}`, this.tag);
+      res.status(400).send({ error: 'Invalid path' });
+      return;
+    }
+    const url = `${config.MEMPOOL_SERVICES.API}/${safePath}`;
     try {
       const response = await axios.post(url, req.body, { responseType: 'stream', timeout: 10000 });
       for (const key in response.headers) {
