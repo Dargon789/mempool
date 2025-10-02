@@ -2,7 +2,7 @@
 name: "✨ Feature Request"
 about: Request a feature or suggest other enhancements
 title: ''
-labels: ''
+labels: 'enhancement'
 assignees: ''
 
 ---
