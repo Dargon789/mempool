@@ -406,4 +406,3 @@ jobs:
         run: |
           cat mempool-config.json | jq
         working-directory: docker/docker/backend
-        
