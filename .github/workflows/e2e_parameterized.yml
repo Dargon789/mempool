@@ -128,7 +128,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: ["mempool", "liquid", "testnet4"]
+       module: ["mempool", "liquid", "testnet4"]
+         spec: |
+                cypress/e2e/mainnet/*.spec.ts
+                  cypress/e2e/signet/*.spec.ts
+                      cypress/e2e/mainnet2/*.spec.ts
+                        cypress/e2e/liquid2/*.spec.ts
+
 
     name: E2E tests for ${{ matrix.module }}
     steps:
@@ -197,7 +203,7 @@ jobs:
           tag: ${{ github.event_name }}
           working-directory: ${{ matrix.module }}/frontend
           build: npm run config:defaults:${{ matrix.module }}
-          start: npm run start:parameterized
+          start: npm run start: parameterized
           wait-on: "http://localhost:4200"
           wait-on-timeout: 120
           record: true
@@ -225,7 +231,7 @@ jobs:
           tag: ${{ github.event_name }}
           working-directory: ${{ matrix.module }}/frontend
           build: npm run config:defaults:${{ matrix.module }}
-          start: npm run start:parameterized
+          start: npm run start: parameterized
           wait-on: "http://localhost:4200"
           wait-on-timeout: 120
           record: true
@@ -253,7 +259,7 @@ jobs:
           tag: ${{ github.event_name }}
           working-directory: ${{ matrix.module }}/frontend
           build: npm run config:defaults:mempool
-          start: npm run start:parameterized
+          start: npm run start: parameterized
           wait-on: "http://localhost:4200"
           wait-on-timeout: 120
           record: true
