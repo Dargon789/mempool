@@ -99,7 +99,7 @@
     "@angular/compiler-cli": "^17.3.1",
     "@angular/language-service": "^17.3.1",
     "@types/node": "^18.11.9",
-    "@typescript-eslint/eslint-plugin": "^7.4.0",
+    "@typescript-eslint/eslint-plugin": "^8.44.0",
     "@typescript-eslint/parser": "^7.4.0",
     "eslint": "^8.57.0",
     "browser-sync": "^3.0.3",
