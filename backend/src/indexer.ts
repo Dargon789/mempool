@@ -120,7 +120,7 @@ class Indexer {
 
     switch (task) {
       case 'blocksPrices': {
-        if (!['testnet', 'signet'].includes(config.MEMPOOL.NETWORK) && config.FIAT_PRICE.ENABLED) {
+        if (!['testnet', 'signet', 'testnet4'].includes(config.MEMPOOL.NETWORK) && config.FIAT_PRICE.ENABLED) {
           let lastestPriceId;
           try {
             lastestPriceId = await PricesRepository.$getLatestPriceId();
@@ -138,7 +138,11 @@ class Indexer {
 
       case 'coinStatsIndex': {
         logger.debug(`Indexing coinStatsIndex now`);
-        await mining.$indexCoinStatsIndex();
+        try {
+          await mining.$indexCoinStatsIndex();
+        } catch (e) {
+          logger.debug(`failed to index coinstatsindex: ` + (e instanceof Error ? e.message : e));
+        }
       } break;
     }
 
