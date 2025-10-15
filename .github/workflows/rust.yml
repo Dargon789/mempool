@@ -1,5 +1,4 @@
 name: Rust
-
 on:
   push:
     branches: [ "master" ]
@@ -15,8 +14,8 @@ env:
 jobs:
   build:
 
-    runs-on: ubuntu-latest
-
+  run: cargo build --release --manifest-path rust/Cargo.toml
+  working-directory: rust
     steps:
     - uses: actions/checkout@v4
     - name: Build with Cargo
