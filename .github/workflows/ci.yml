@@ -320,9 +320,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ matrix.module }}/frontend/node_modules
-          key: ${{ runner.os }}-e2e-${{ matrix.module }}-node-22-${{ hashFiles('${{ matrix.module }}/frontend/package-lock.json') }}
+          key: ${{ runner.os }}-e2e-${{ matrix.module }}-node-${{ matrix.node }}-${{ hashFiles('${{ matrix.module }}/frontend/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-e2e-${{ matrix.module }}-node-22-
+            ${{ runner.os }}-e2e-${{ matrix.module }}-node-${{ matrix.node }}-
             ${{ runner.os }}-e2e-${{ matrix.module }}-
       - name: Restore cached mining pool assets
         continue-on-error: true
