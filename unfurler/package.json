@@ -17,7 +17,7 @@
     "prettier": "./node_modules/.bin/prettier --write \"src/**/*.{js,ts}\""
   },
   "dependencies": {
-    "@types/node": "^16.11.41",
+    "@types/node": "^24.6.2",
     "express": "^4.19.2",
     "ejs": "^3.1.10",
     "node-fetch-commonjs": "^3.3.1",
