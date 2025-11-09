@@ -342,7 +342,7 @@ const downloadLiquidAssets = () => {
 
   console.log(`${LOG_TAG} Downloading assets`);
   liquidAssets.forEach(({ file, url }) => {
-    const fileName = file.replace(/^assets/, 'assets');
+    const fileName = file;
     console.log(`${LOG_TAG} Downloading ${fileName}`);
     downloadFile(`${ASSETS_PATH}/${fileName}`, url);
   });
