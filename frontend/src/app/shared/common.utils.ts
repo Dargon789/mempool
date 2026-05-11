@@ -229,8 +229,10 @@ export function handleDemoRedirect(route: ActivatedRoute, router: Router) {
         const path = ['/', '/acceleration', '/mining', '/lightning'];
         const index = path.indexOf(params.next);
         if (index >= 0) {
+          const currentPath = path[index];
           const nextPath = path[(index + 1) % path.length];
-          setTimeout(() => { window.location.replace(`${params.next}?next=${nextPath}`); }, 15000);
+          const redirectUrl = `${currentPath}?next=${encodeURIComponent(nextPath)}`;
+          setTimeout(() => { window.location.replace(redirectUrl); }, 15000);
         }
       }
     }
