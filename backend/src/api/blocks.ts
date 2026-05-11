@@ -2,7 +2,7 @@ import config from '../config';
 import bitcoinApi, { bitcoinCoreApi } from './bitcoin/bitcoin-api-factory';
 import logger from '../logger';
 import memPool from './mempool';
-import { BlockExtended, BlockExtension, BlockSummary, PoolTag, TransactionExtended, TransactionMinerInfo, CpfpSummary, MempoolTransactionExtended, TransactionClassified, BlockAudit, TransactionAudit } from '../mempool.interfaces';
+import { BlockExtended, BlockExtension, BlockSummary, PoolTag, TransactionExtended, TransactionMinerInfo, CpfpSummary, MempoolTransactionExtended, TransactionClassified, BlockAudit, TransactionAudit, TemplateAlgorithm } from '../mempool.interfaces';
 import { Common } from './common';
 import diskCache from './disk-cache';
 import transactionUtils from './transaction-utils';
@@ -28,13 +28,18 @@ import chainTips from './chain-tips';
 import websocketHandler from './websocket-handler';
 import redisCache from './redis-cache';
 import rbfCache from './rbf-cache';
+import bitcoinSecondClient from './bitcoin/bitcoin-second-client';
+import mempoolBlocks from './mempool-blocks';
+import statistics from './statistics/statistics';
 import { calcBitsDifference } from './difficulty-adjustment';
 import AccelerationRepository from '../repositories/AccelerationRepository';
-import { calculateFastBlockCpfp, calculateGoodBlockCpfp } from './cpfp';
+import { calculateGoodBlockCpfp } from './cpfp';
+import blockProcessor, { BlockProcessingResult, detectTemplateAlgorithm, saveCpfpDataToCpfpSummary } from './block-processor';
 import mempool from './mempool';
 import CpfpRepository from '../repositories/CpfpRepository';
 import { parseDATUMTemplateCreator } from '../utils/bitcoin-script';
 import database from '../database';
+import { getBlockFirstSeenFromLogs, getOldestLogTimestampFromLogs, scanLogsForBlocksFirstSeen } from '../utils/file-read';
 
 class Blocks {
   private blocks: BlockExtended[] = [];
@@ -45,8 +50,8 @@ class Blocks {
   private previousDifficultyRetarget = 0;
   private quarterEpochBlockTime: number | null = null;
   private newBlockCallbacks: ((block: BlockExtended, txIds: string[], transactions: TransactionExtended[]) => void)[] = [];
-  private newAsyncBlockCallbacks: ((block: BlockExtended, txIds: string[], transactions: MempoolTransactionExtended[]) => Promise<void>)[] = [];
   private classifyingBlocks: boolean = false;
+  private oldestCoreLogTimestamp: number | undefined | null = undefined;
 
   private mainLoopTimeout: number = 120000;
 
@@ -72,10 +77,6 @@ class Blocks {
     this.newBlockCallbacks.push(fn);
   }
 
-  public setNewAsyncBlockCallback(fn: (block: BlockExtended, txIds: string[], transactions: MempoolTransactionExtended[]) => Promise<void>) {
-    this.newAsyncBlockCallbacks.push(fn);
-  }
-
   /**
    * Return the list of transaction for a block
    * @param blockHash
@@ -85,6 +86,8 @@ class Blocks {
    * @param quiet - don't print non-essential logs
    * @param addMempoolData - calculate sigops etc
    * @returns Promise<TransactionExtended[]>
+   *
+   * @asyncUnsafe
    */
   private async $getTransactionsExtended(
     blockHash: string,
@@ -106,7 +109,7 @@ class Blocks {
     const mempool = memPool.getMempool();
     let foundInMempool = 0;
     let totalFound = 0;
-    let missing = 0;
+    const missing = 0;
 
     // Copy existing transactions from the mempool
     if (!onlyCoinbase) {
@@ -245,8 +248,10 @@ class Blocks {
    * @param block
    * @param transactions
    * @returns BlockExtended
+   *
+   * @asyncUnsafe
    */
-  private async $getBlockExtended(block: IEsploraApi.Block, transactions: TransactionExtended[]): Promise<BlockExtended> {
+  public async $getBlockExtended(block: IEsploraApi.Block, transactions: TransactionExtended[], providedPool?: PoolTag): Promise<BlockExtended> {
     const coinbaseTx = transactionUtils.stripCoinbaseTransaction(transactions[0]);
 
     const blk: Partial<BlockExtended> = Object.assign({}, block);
@@ -327,9 +332,11 @@ class Blocks {
       extras.totalInputAmt = null;
     }
 
-    if (['mainnet', 'testnet', 'signet', 'testnet4'].includes(config.MEMPOOL.NETWORK)) {
+    if (['mainnet', 'testnet', 'signet', 'testnet4', 'regtest'].includes(config.MEMPOOL.NETWORK)) {
       let pool: PoolTag;
-      if (coinbaseTx !== undefined) {
+      if (providedPool) {
+        pool = providedPool;
+      } else if (coinbaseTx !== undefined) {
         pool = await this.$findBlockMiner(coinbaseTx);
       } else {
         if (config.DATABASE.ENABLED === true) {
@@ -366,13 +373,21 @@ class Blocks {
           extras.expectedWeight = auditScore.expectedWeight;
         }
       }
+
+      extras.firstSeen = null;
+      if (config.CORE_RPC.DEBUG_LOG_PATH) {
+        const oldestLog = this.getOldestCoreLogTimestamp();
+        if (oldestLog) {
+          extras.firstSeen = getBlockFirstSeenFromLogs(block.id, block.timestamp, oldestLog);
+        }
+      }
     }
 
     blk.extras = <BlockExtension>extras;
     return <BlockExtended>blk;
   }
 
-  private async $getBlockStats(block: IEsploraApi.Block, transactions: TransactionExtended[]): Promise<IBitcoinApi.BlockStats> {
+  public async $getBlockStats(block: IEsploraApi.Block, transactions: TransactionExtended[]): Promise<IBitcoinApi.BlockStats> {
     if (!block.stale) {
       return bitcoinClient.getBlockStats(block.id);
     }
@@ -449,6 +464,8 @@ class Blocks {
    * Try to find which miner found the block
    * @param txMinerInfo
    * @returns
+   *
+   * @asyncUnsafe
    */
   private async $findBlockMiner(txMinerInfo: TransactionMinerInfo | undefined): Promise<PoolTag> {
     if (txMinerInfo === undefined || txMinerInfo.vout.length < 1) {
@@ -477,6 +494,128 @@ class Blocks {
       return await poolsRepository.$getUnknownPool();
     } else {
       return poolsParser.unknownPool;
+    }
+  }
+
+  /** @asyncUnsafe */
+  private async $applyBlockTransactionsToMempool(
+    txIds: string[],
+    transactions: MempoolTransactionExtended[]
+  ): Promise<{ rbfTransactions: { [txid: string]: { replaced: MempoolTransactionExtended[], replacedBy: TransactionExtended }}}> {
+    const _memPool = memPool.getMempool();
+
+    const rbfTransactions = Common.findMinedRbfTransactions(transactions, memPool.getSpendMap());
+    memPool.handleRbfTransactions(rbfTransactions);
+    memPool.removeFromSpendMap(transactions);
+
+    if (config.MEMPOOL.CLUSTER_MEMPOOL) {
+      memPool.clusterMempool?.applyMempoolChange({
+        added: [],
+        removed: txIds,
+        accelerations: mempool.getAccelerations(),
+      });
+    }
+
+    for (const txId of txIds) {
+      delete _memPool[txId];
+      rbfCache.mined(txId);
+    }
+
+    let candidates;
+    let transactionIds: string[];
+
+    if (memPool.limitGBT) {
+      const minFeeMempool = await bitcoinSecondClient.getRawMemPool();
+      const minFeeTip = await bitcoinSecondClient.getBlockCount();
+      candidates = memPool.getNextCandidates(minFeeMempool, minFeeTip, transactions);
+      transactionIds = Object.keys(candidates?.txs || {});
+    } else {
+      candidates = undefined;
+      transactionIds = Object.keys(memPool.getMempool());
+    }
+
+    if (config.MEMPOOL.CLUSTER_MEMPOOL) {
+      const cmBlocks = mempool.clusterMempool?.getBlocks(config.MEMPOOL.MEMPOOL_BLOCKS_AMOUNT) ?? [];
+      mempoolBlocks.processClusterMempoolBlocks(cmBlocks, _memPool, mempool.getAccelerations());
+    } else if (config.MEMPOOL.RUST_GBT) {
+      const added = memPool.limitGBT ? (candidates?.added || []) : [];
+      const removed = memPool.limitGBT ? (candidates?.removed || []) : transactions;
+      await mempoolBlocks.$rustUpdateBlockTemplates(transactionIds, _memPool, added, removed, candidates, true);
+    } else {
+      await mempoolBlocks.$makeBlockTemplates(transactionIds, _memPool, candidates, true, true);
+    }
+
+    return { rbfTransactions };
+  }
+
+  /** @asyncUnsafe */
+  private async $saveBlockData(
+    processingResult: BlockProcessingResult,
+    timer: number
+  ): Promise<void> {
+    const blockExtended = processingResult.blockExtended;
+    const cpfpSummary = processingResult.cpfpSummary;
+
+    let latestPriceId;
+    try {
+      latestPriceId = await PricesRepository.$getLatestPriceId();
+      this.updateTimerProgress(timer, `got latest price id ${this.currentBlockHeight}`);
+    } catch (e) {
+      logger.debug('failed to fetch latest price id from db: ' + (e instanceof Error ? e.message : e));
+    }
+    if (priceUpdater.historyInserted === true && latestPriceId !== null) {
+      await blocksRepository.$saveBlockPrices([{
+        height: blockExtended.height,
+        priceId: latestPriceId,
+      }]);
+      this.updateTimerProgress(timer, `saved prices for ${this.currentBlockHeight}`);
+    } else {
+      logger.debug(`Cannot save block price for ${blockExtended.height} because the price updater hasnt completed yet. Trying again in 10 seconds.`, logger.tags.mining);
+      indexer.scheduleSingleTask('blocksPrices', 10000);
+    }
+
+    if (Common.blocksSummariesIndexingEnabled() === true) {
+      // indexes the summary as a side effect
+      await this.$getStrippedBlockTransactions(blockExtended.id, true, false, cpfpSummary, blockExtended.height);
+      this.updateTimerProgress(timer, `saved block summary for ${this.currentBlockHeight}`);
+    }
+
+    if (config.MEMPOOL.CPFP_INDEXING) {
+      // can be slow, and isn't critical, so don't await
+      void this.$saveCpfp(blockExtended.id, this.currentBlockHeight, cpfpSummary);
+      this.updateTimerProgress(timer, `saved cpfp for ${this.currentBlockHeight}`);
+    }
+
+    if (processingResult.auditResult) {
+      void BlocksSummariesRepository.$saveTemplate({
+        height: blockExtended.height,
+        template: {
+          id: blockExtended.id,
+          transactions: processingResult.auditResult.projectedBlocks[0].transactions,
+        },
+        version: 1,
+      });
+      this.updateTimerProgress(timer, `saved audit template for ${this.currentBlockHeight}`);
+
+      void BlocksAuditsRepository.$saveAudit({
+        version: 1,
+        templateAlgorithm: processingResult.templateAlgorithm,
+        time: blockExtended.timestamp,
+        height: blockExtended.height,
+        hash: blockExtended.id,
+        unseenTxs: processingResult.auditResult.unseen,
+        addedTxs: processingResult.auditResult.added,
+        prioritizedTxs: processingResult.auditResult.prioritized,
+        missingTxs: processingResult.auditResult.censored,
+        freshTxs: processingResult.auditResult.fresh,
+        sigopTxs: processingResult.auditResult.sigop,
+        fullrbfTxs: processingResult.auditResult.fullrbf,
+        acceleratedTxs: processingResult.auditResult.accelerated,
+        matchRate: processingResult.auditResult.matchRate,
+        expectedFees: processingResult.auditResult.expectedFees,
+        expectedWeight: processingResult.auditResult.expectedWeight,
+      });
+      this.updateTimerProgress(timer, `saved audit results for ${this.currentBlockHeight}`);
     }
   }
 
@@ -547,6 +686,7 @@ class Blocks {
     }
   }
 
+  /** @asyncUnsafe */
   public async $indexBlockSummary(hash: string, height: number, stale?: boolean): Promise<void> {
     if (config.MEMPOOL.BACKEND === 'esplora') {
       const txs = (await bitcoinApi.$getTxsForBlock(hash, stale)).map(tx => transactionUtils.extendMempoolTransaction(tx));
@@ -610,6 +750,8 @@ class Blocks {
 
   /**
    * [INDEXING] Index expected fees & weight for all audited blocks
+   *
+   * @asyncUnsafe
    */
   public async $generateAuditStats(): Promise<void> {
     const blockIds = await BlocksAuditsRepository.$getBlocksWithoutSummaries();
@@ -650,6 +792,8 @@ class Blocks {
 
   /**
    * [INDEXING] Index transaction classification flags for Goggles
+   *
+   * @asyncSafe
    */
   public async $classifyBlocks(): Promise<void> {
     if (this.classifyingBlocks) {
@@ -707,7 +851,8 @@ class Blocks {
           // fetch transactions
           txs = (await bitcoinApi.$getTxsForBlock(blockHash, true)).map(tx => transactionUtils.extendMempoolTransaction(tx)) || [];
           // add CPFP
-          const cpfpSummary = calculateGoodBlockCpfp(height, txs, []);
+          const blockCpfpData = calculateGoodBlockCpfp(height, txs, []);
+          const cpfpSummary = saveCpfpDataToCpfpSummary(txs, blockCpfpData);
           // classify
           const { transactions: classifiedTxs } = this.summarizeBlockTransactions(blockHash, height, cpfpSummary.transactions);
           await BlocksSummariesRepository.$saveTransactions(height, blockHash, classifiedTxs, 2);
@@ -744,7 +889,8 @@ class Blocks {
               }
               templateTxs.push(tx || templateTx);
             }
-            const cpfpSummary = calculateGoodBlockCpfp(height, templateTxs?.filter(tx => tx['effectiveFeePerVsize'] != null) as MempoolTransactionExtended[], []);
+            const blockCpfpData = calculateGoodBlockCpfp(height, templateTxs?.filter(tx => tx['effectiveFeePerVsize'] != null) as MempoolTransactionExtended[], []);
+            const cpfpSummary = saveCpfpDataToCpfpSummary(templateTxs as MempoolTransactionExtended[], blockCpfpData);
             // classify
             const { transactions: classifiedTxs } = this.summarizeBlockTransactions(blockHash, height, cpfpSummary.transactions);
             const classifiedTxMap: { [txid: string]: TransactionClassified } = {};
@@ -830,6 +976,7 @@ class Blocks {
 
   /**
    * [INDEXING] Index all blocks metadata for the mining dashboard
+   * @asyncSafe
    */
   public async $generateBlockDatabase(): Promise<boolean> {
     try {
@@ -907,6 +1054,46 @@ class Blocks {
     return await BlocksRepository.$validateChain();
   }
 
+  /**
+   * [INDEXING] Index all blocks first seen time from Bitcoin Core debug logs
+   * 
+   * @asyncUnsafe
+   */
+  public async $indexBlocksFirstSeen(): Promise<void> {
+    const previous = this.oldestCoreLogTimestamp;
+    const oldestLogTimestamp = this.getOldestCoreLogTimestamp(true);
+    const hasLogFileChanged = previous !== undefined && oldestLogTimestamp !== previous;
+
+    if (!oldestLogTimestamp) {
+      return;
+    }
+
+    // If the log file changed since last run, re-try to index blocks marked with sentinel value
+    const blocks = await BlocksRepository.$getBlocksWithoutFirstSeen(hasLogFileChanged);
+
+    if (!blocks?.length) {
+      return;
+    }
+    logger.debug(`Indexing ${blocks.length} block first seen times${hasLogFileChanged ? ' (log file changed since last run)' : ''}`);
+    const startedAt = Date.now();
+    const results = scanLogsForBlocksFirstSeen(blocks, oldestLogTimestamp);
+    const foundCount = results.filter(result => result.firstSeen !== null).length;
+    logger.debug(`Found first seen times of ${foundCount} / ${results.length} blocks in Core logs, saving to database...`);
+    await BlocksRepository.$saveFirstSeenTimes(results);
+
+    const blocksByHash = new Map<string, BlockExtended>(this.blocks.map<[string, BlockExtended]>(block => [block.id, block]));
+
+    for (const { hash, firstSeen } of results) {
+      const cachedBlock = blocksByHash.get(hash);
+      if (cachedBlock?.extras) {
+        cachedBlock.extras.firstSeen = firstSeen;
+      }
+    }
+
+    logger.debug(`Indexed ${foundCount} / ${blocks.length} block first seen times in ${((Date.now() - startedAt) / 1000).toFixed(2)} seconds`);
+  }
+
+  /** @asyncUnsafe */
   public async $updateBlocks(): Promise<number> {
     // warn if this run stalls the main loop for more than 2 minutes
     const timer = this.startTimer();
@@ -992,58 +1179,54 @@ class Blocks {
         }
       }
 
-      let accelerations = Object.values(mempool.getAccelerations());
-      if (accelerations?.length > 0) {
-        const pool = await this.$findBlockMiner(transactionUtils.stripCoinbaseTransaction(transactions[0]));
-        accelerations = accelerations.filter(a => a.pools.includes(pool.uniqueId));
-      }
-      const cpfpSummary: CpfpSummary = calculateGoodBlockCpfp(block.height, transactions, accelerations.map(a => ({ txid: a.txid, max_bid: a.feeDelta })));
-      const blockExtended: BlockExtended = await this.$getBlockExtended(block, cpfpSummary.transactions);
-      const blockSummary: BlockSummary = this.summarizeBlockTransactions(block.id, block.height, cpfpSummary.transactions);
+      const pool = await this.$findBlockMiner(transactionUtils.stripCoinbaseTransaction(transactions[0]));
+      const accelerations = mempool.getAccelerations();
+
+      const processingResult = await blockProcessor.$processNewBlock(
+        block,
+        transactions,
+        pool,
+        accelerations
+      );
+
+      const blockExtended = processingResult.blockExtended;
+      const blockSummary = processingResult.blockSummary;
+      const cpfpSummary = processingResult.cpfpSummary;
       this.updateTimerProgress(timer, `got block data for ${this.currentBlockHeight}`);
 
-      if (Common.indexingEnabled()) {
-        if (!fastForwarded) {
-          await this.$handleReorgs(blockExtended, timer);
-        }
+      if (config.STATISTICS.ENABLED && config.DATABASE.ENABLED) {
+        await statistics.runStatistics();
+      }
 
+      const { rbfTransactions } = await this.$applyBlockTransactionsToMempool(txIds, cpfpSummary.transactions);
+      this.updateTimerProgress(timer, `applied mempool changes for ${this.currentBlockHeight}`);
+
+      if (config.STATISTICS.ENABLED && config.DATABASE.ENABLED) {
+        await statistics.runStatistics();
+      }
+
+      if (Common.indexingEnabled() && !fastForwarded) {
+        await this.$handleReorgs(blockExtended, timer);
+      }
+
+      await websocketHandler.handleNewBlock(blockExtended, txIds, cpfpSummary.transactions, rbfTransactions);
+      this.updateTimerProgress(timer, `sent websocket updates for ${this.currentBlockHeight}`);
+
+      if (Common.indexingEnabled()) {
         await blocksRepository.$saveBlockInDatabase(blockExtended);
         this.updateTimerProgress(timer, `saved ${this.currentBlockHeight} to database`);
 
-        if (!fastForwarded) {
-          let lastestPriceId;
-          try {
-            lastestPriceId = await PricesRepository.$getLatestPriceId();
-            this.updateTimerProgress(timer, `got latest price id ${this.currentBlockHeight}`);
-          } catch (e) {
-            logger.debug('failed to fetch latest price id from db: ' + (e instanceof Error ? e.message : e));
-          }
-          if (priceUpdater.historyInserted === true && lastestPriceId !== null) {
-            await blocksRepository.$saveBlockPrices([{
-              height: blockExtended.height,
-              priceId: lastestPriceId,
-            }]);
-            this.updateTimerProgress(timer, `saved prices for ${this.currentBlockHeight}`);
-          } else {
-            logger.debug(`Cannot save block price for ${blockExtended.height} because the price updater hasnt completed yet. Trying again in 10 seconds.`, logger.tags.mining);
-            indexer.scheduleSingleTask('blocksPrices', 10000);
-          }
+        await AccelerationRepository.$indexAccelerationsForBlock(
+          blockExtended,
+          Object.values(accelerations),
+          cpfpSummary.transactions
+        );
+        this.updateTimerProgress(timer, `indexed accelerations for ${this.currentBlockHeight}`);
 
-          // Save blocks summary for visualization if it's enabled
-          if (Common.blocksSummariesIndexingEnabled() === true) {
-            await this.$getStrippedBlockTransactions(blockExtended.id, true, false, cpfpSummary, blockExtended.height);
-            this.updateTimerProgress(timer, `saved block summary for ${this.currentBlockHeight}`);
-          }
-          if (config.MEMPOOL.CPFP_INDEXING) {
-            this.$saveCpfp(blockExtended.id, this.currentBlockHeight, cpfpSummary);
-            this.updateTimerProgress(timer, `saved cpfp for ${this.currentBlockHeight}`);
-          }
+        if (!fastForwarded) {
+          await this.$saveBlockData(processingResult, timer);
         }
       }
-
-      // start async callbacks
-      this.updateTimerProgress(timer, `starting async callbacks for ${this.currentBlockHeight}`);
-      const callbackPromises = this.newAsyncBlockCallbacks.map((cb) => cb(blockExtended, txIds, cpfpSummary.transactions));
 
       if (block.height % 2016 === 0) {
         if (Common.indexingEnabled()) {
@@ -1082,11 +1265,6 @@ class Blocks {
         await chainTips.updateOrphanedBlocks();
       }
 
-      // wait for pending async callbacks to finish
-      this.updateTimerProgress(timer, `waiting for async callbacks to complete for ${this.currentBlockHeight}`);
-      await Promise.all(callbackPromises);
-      this.updateTimerProgress(timer, `async callbacks completed for ${this.currentBlockHeight}`);
-
       this.blocks.push(blockExtended);
       if (this.blocks.length > config.MEMPOOL.INITIAL_BLOCKS_AMOUNT * 4) {
         this.blocks = this.blocks.slice(-config.MEMPOOL.INITIAL_BLOCKS_AMOUNT * 4);
@@ -1103,7 +1281,7 @@ class Blocks {
         this.newBlockCallbacks.forEach((cb) => cb(blockExtended, txIds, transactions));
       }
       if (config.MEMPOOL.CACHE_ENABLED && !memPool.hasPriority() && (block.height % config.MEMPOOL.DISK_CACHE_BLOCK_INTERVAL === 0)) {
-        diskCache.$saveCacheToDisk();
+        void diskCache.$saveCacheToDisk();
       }
 
       // Update Redis cache
@@ -1146,6 +1324,7 @@ class Blocks {
     }
   }
 
+  /** @asyncUnsafe */
   private async updateQuarterEpochBlockTime(): Promise<void> {
     if (this.currentBlockHeight >= 503) {
       try {
@@ -1159,6 +1338,10 @@ class Blocks {
     }
   }
 
+  /**
+   * Index a block if it's missing from the database. Returns the block after indexing
+   * @asyncUnsafe
+   */
   public async $indexBlockByHeight(height: number, skipDb = false): Promise<BlockExtended> {
     if (Common.indexingEnabled() && !skipDb) {
       const dbBlock = await blocksRepository.$getBlockByHeight(height);
@@ -1171,6 +1354,7 @@ class Blocks {
     return this.$indexBlock(hash);
   }
 
+  /** @asyncUnsafe */
   private async $handleReorgs(blockExtended: BlockExtended, timer: any): Promise<void> {
     let forkTail = blockExtended;
     let currentlyIndexed = await blocksRepository.$getBlockByHeight(forkTail.height - 1);
@@ -1242,6 +1426,8 @@ class Blocks {
 
   /**
    * Index a block if it's missing from the database. Returns the block after indexing
+   *
+   * @asyncUnsafe
    */
   public async $indexBlock(hash: string, block?: IEsploraApi.Block, skipDb = false): Promise<BlockExtended> {
     if (Common.indexingEnabled() && !skipDb) {
@@ -1271,6 +1457,7 @@ class Blocks {
 
   /**
    * Get one block by its hash
+   * @asyncUnsafe
    */
   public async $getBlock(hash: string, skipMemoryCache: boolean = false): Promise<BlockExtended | IEsploraApi.Block> {
     // Check the memory cache
@@ -1282,7 +1469,7 @@ class Blocks {
     }
 
     // Not Bitcoin network, return the block as it from the bitcoin backend
-    if (['mainnet', 'testnet', 'signet', 'testnet4'].includes(config.MEMPOOL.NETWORK) === false) {
+    if (['mainnet', 'testnet', 'signet', 'testnet4', 'regtest'].includes(config.MEMPOOL.NETWORK) === false) {
       return await bitcoinCoreApi.$getBlock(hash);
     }
 
@@ -1290,6 +1477,7 @@ class Blocks {
     return await this.$indexBlock(hash);
   }
 
+  /** @asyncUnsafe */
   public async $getStrippedBlockTransactions(hash: string, skipMemoryCache = false,
     skipDBLookup = false, cpfpSummary?: CpfpSummary, blockHeight?: number): Promise<TransactionClassified[]>
   {
@@ -1358,6 +1546,7 @@ class Blocks {
     return summary.transactions;
   }
 
+  /** @asyncUnsafe */
   public async $getSingleTxFromSummary(hash: string, txid: string): Promise<TransactionClassified | null> {
     const txs = await this.$getStrippedBlockTransactions(hash);
     return txs.find(tx => tx.txid === txid) || null;
@@ -1365,15 +1554,16 @@ class Blocks {
 
   /**
    * Get 15 blocks
-   * 
+   *
    * Internally this function uses two methods to get the blocks, and
    * the method is automatically selected:
    *  - Using previous block hash links
    *  - Using block height
-   * 
-   * @param fromHeight 
-   * @param limit 
-   * @returns 
+   *
+   * @param fromHeight
+   * @param limit
+   * @returns
+   * @asyncUnsafe
    */
   public async $getBlocks(fromHeight?: number, limit: number = 15): Promise<BlockExtended[]> {
     let currentHeight = fromHeight !== undefined ? fromHeight : this.currentBlockHeight;
@@ -1405,9 +1595,10 @@ class Blocks {
 
   /**
    * Used for bulk block data query
-   * 
-   * @param fromHeight 
-   * @param toHeight 
+   *
+   * @param fromHeight
+   * @param toHeight
+   * @asyncUnsafe
    */
   public async $getBlocksBetweenHeight(fromHeight: number, toHeight: number): Promise<any> {
     if (!Common.indexingEnabled()) {
@@ -1525,7 +1716,7 @@ class Blocks {
   }
 
   public async $getBlockAuditSummary(hash: string): Promise<BlockAudit | null> {
-    if (['mainnet', 'testnet', 'signet', 'testnet4'].includes(config.MEMPOOL.NETWORK) && Common.auditIndexingEnabled()) {
+    if (['mainnet', 'testnet', 'signet', 'testnet4', 'regtest'].includes(config.MEMPOOL.NETWORK) && Common.auditIndexingEnabled()) {
       return BlocksAuditsRepository.$getBlockAudit(hash);
     } else {
       return null;
@@ -1533,7 +1724,7 @@ class Blocks {
   }
 
   public async $getBlockTxAuditSummary(hash: string, txid: string): Promise<TransactionAudit | null> {
-    if (['mainnet', 'testnet', 'signet', 'testnet4'].includes(config.MEMPOOL.NETWORK) && Common.auditIndexingEnabled()) {
+    if (['mainnet', 'testnet', 'signet', 'testnet4', 'regtest'].includes(config.MEMPOOL.NETWORK) && Common.auditIndexingEnabled()) {
       return BlocksAuditsRepository.$getBlockTxAudit(hash, txid);
     } else {
       return null;
@@ -1556,6 +1747,7 @@ class Blocks {
     return this.currentBlockHeight;
   }
 
+/** @asyncUnsafe */
   public async $indexCPFP(hash: string, height: number, txs?: MempoolTransactionExtended[], stale?: boolean): Promise<CpfpSummary | null> {
     let transactions = txs;
     if (!transactions) {
@@ -1572,22 +1764,23 @@ class Blocks {
     }
 
     if (transactions?.length != null) {
-      const summary = calculateFastBlockCpfp(height, transactions);
+      const { cpfpSummary } = await detectTemplateAlgorithm(height, transactions, [], true);
 
       if (!stale) {
-        await this.$saveCpfp(hash, height, summary);
+        await this.$saveCpfp(hash, height, cpfpSummary);
       }
 
-      const effectiveFeeStats = Common.calcEffectiveFeeStatistics(summary.transactions);
+      const effectiveFeeStats = Common.calcEffectiveFeeStatistics(cpfpSummary.transactions);
       await blocksRepository.$saveEffectiveFeeStats(hash, effectiveFeeStats);
 
-      return summary;
+      return cpfpSummary;
     } else {
       logger.err(`Cannot index CPFP for block ${height} - missing transaction data`);
       return null;
     }
   }
 
+  /** @asyncSafe */
   public async $saveCpfp(hash: string, height: number, cpfpSummary: CpfpSummary): Promise<void> {
     try {
       const result = await cpfpRepository.$batchSaveClusters(cpfpSummary.clusters);
@@ -1625,6 +1818,30 @@ class Blocks {
       }
     } catch (e) {
       logger.debug(`Unable to retrieve list of blocks for definition hash ${definitionHash} from db (exception: ${e})`);
+      return null;
+    }
+  }
+
+  public getOldestCoreLogTimestamp(forceRefresh = false): number | null {
+    if (!forceRefresh && this.oldestCoreLogTimestamp !== undefined) {
+      return this.oldestCoreLogTimestamp;
+    }
+    const debugLogPath = config.CORE_RPC.DEBUG_LOG_PATH;
+    if (!debugLogPath) {
+      this.oldestCoreLogTimestamp = null;
+      return null;
+    }
+    try {
+      this.oldestCoreLogTimestamp = getOldestLogTimestampFromLogs(debugLogPath);
+      if (this.oldestCoreLogTimestamp !== null) {
+        logger.info(`Core debug log entries date back to ${new Date(this.oldestCoreLogTimestamp * 1000).toISOString()}`);
+      } else {
+        logger.err(`Could not find oldest timestamp in Core debug log file at ${debugLogPath}`);
+      }
+      return this.oldestCoreLogTimestamp;
+    } catch (e) {
+      this.oldestCoreLogTimestamp = null;
+      logger.err(`Could not read Core debug log file at ${debugLogPath}. Reason: ${e instanceof Error ? e.message : e}`);
       return null;
     }
   }
