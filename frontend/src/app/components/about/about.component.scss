@@ -147,6 +147,7 @@
   .community-integrations-sponsor,
   .maintainers {
     scroll-margin: 30px;
+    scroll-margin-top: 65px;
     .wrapper {
       display: inline-block;
       a {
@@ -198,7 +199,7 @@
     margin: auto;
     line-height: 1.8;
     font-size: 87.5%;
-    color: #e83e8c;
+    color: var(--pink);
     word-wrap: break-word;
     font-family: SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace;
     ul {
@@ -272,6 +273,6 @@
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
-    max-width: 850px;
+    max-width: 1050px;
   }
 }

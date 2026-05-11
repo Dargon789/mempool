@@ -17,6 +17,7 @@ class AuditReplication {
   inProgress: boolean = false;
   skip: Set<string> = new Set();
 
+  /** @asyncUnsafe */
   public async $sync(): Promise<void> {
     if (!config.REPLICATION.ENABLED || !config.REPLICATION.AUDIT) {
       // replication not enabled
@@ -54,6 +55,7 @@ class AuditReplication {
     this.inProgress = false;
   }
 
+  /** @asyncUnsafe */
   private async $syncAudit(hash: string): Promise<boolean> {
     if (this.skip.has(hash)) {
       // we already know none of our trusted servers have this audit
@@ -77,6 +79,8 @@ class AuditReplication {
     return success;
   }
 
+  
+  /** @asyncSafe */
   private async $getMissingAuditBlocks(): Promise<string[]> {
     try {
       const startHeight = config.REPLICATION.AUDIT_START_HEIGHT || 0;
@@ -110,6 +114,7 @@ class AuditReplication {
     });
     await blocksAuditsRepository.$saveAudit({
       version: auditSummary.version || 0,
+      templateAlgorithm: auditSummary.templateAlgorithm ?? 0,
       hash: blockHash,
       height: auditSummary.height,
       time: auditSummary.timestamp || auditSummary.time,

@@ -24,6 +24,7 @@ export class MasterPageComponent implements OnInit, OnDestroy {
   navCollapsed = false;
   isMobile = window.innerWidth <= 767.98;
   officialMempoolSpace = this.stateService.env.OFFICIAL_MEMPOOL_SPACE;
+  officialMempoolSpaceBuild = this.stateService.isMempoolSpaceBuild;
   urlLanguage: string;
   subdomain = '';
   networkPaths: { [network: string]: string };
@@ -33,7 +34,7 @@ export class MasterPageComponent implements OnInit, OnDestroy {
   servicesEnabled = false;
   menuOpen = false;
   isDropdownVisible: boolean;
-  
+
   enterpriseInfo: any;
   enterpriseInfo$: Subscription;
 
@@ -70,7 +71,7 @@ export class MasterPageComponent implements OnInit, OnDestroy {
     this.enterpriseInfo$ = this.enterpriseService.info$.subscribe(info => {
       this.enterpriseInfo = info;
     });
-    
+
     this.servicesEnabled = this.officialMempoolSpace && this.stateService.env.ACCELERATOR === true && this.stateService.network === '';
     this.refreshAuth();
 
@@ -79,11 +80,16 @@ export class MasterPageComponent implements OnInit, OnDestroy {
     this.setDropdownVisibility();
   }
 
+  get networkDisplayName(): string {
+    return this.stateService.networkDisplayName;
+  }
+
   setDropdownVisibility(): void {
     const networks = [
       this.env.TESTNET_ENABLED,
       this.env.TESTNET4_ENABLED,
       this.env.SIGNET_ENABLED,
+      this.env.REGTEST_ENABLED,
       this.env.LIQUID_ENABLED,
       this.env.LIQUID_TESTNET_ENABLED,
       this.env.MAINNET_ENABLED,

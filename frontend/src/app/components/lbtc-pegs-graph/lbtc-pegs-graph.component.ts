@@ -13,8 +13,17 @@ import { AmountShortenerPipe } from '@app/shared/pipes/amount-shortener.pipe';
   .loadingGraphs {
       position: absolute;
       top: 50%;
-      left: calc(50% - 16px);
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 100%;
+      text-align: center;
       z-index: 99;
+
+      .audit-in-progress-text {
+        color: var(--transparent-fg);
+        font-size: 14px;
+        font-weight: 500;
+      } 
     }
   `],
   templateUrl: './lbtc-pegs-graph.component.html',
@@ -24,11 +33,12 @@ import { AmountShortenerPipe } from '@app/shared/pipes/amount-shortener.pipe';
 export class LbtcPegsGraphComponent implements OnInit, OnChanges {
   @Input() data: any;
   @Input() height: number | string = '360';
+  @Input() auditInProgress = false;
   pegsChartOptions: EChartsOption;
   subscription: Subscription;
 
   right: number | string = '5';
-  top: number | string = '20';
+  top: number | string = '32';
   left: number | string = '60';
   template: ('widget' | 'advanced') = 'widget';
   isLoading = true;
@@ -117,12 +127,13 @@ export class LbtcPegsGraphComponent implements OnInit, OnChanges {
         }
       }],
       legend: {
+        top: -5,
         data: [
           {
             name: 'LBTC',
             inactiveColor: 'var(--grey)',
             textStyle: {
-              color: 'white',
+              color: 'var(--fg)',
             },
             icon: 'roundRect',
           },
@@ -130,7 +141,7 @@ export class LbtcPegsGraphComponent implements OnInit, OnChanges {
             name: 'BTC',
             inactiveColor: 'var(--grey)',
             textStyle: {
-              color: 'white',
+              color: 'var(--fg)',
             },
             icon: 'roundRect',
           },
@@ -138,7 +149,7 @@ export class LbtcPegsGraphComponent implements OnInit, OnChanges {
             name: 'USD',
             inactiveColor: 'var(--grey)',
             textStyle: {
-              color: 'white',
+              color: 'var(--fg)',
             },
             icon: 'roundRect',
           }

@@ -12,7 +12,7 @@ import backendInfo from '../backend-info';
 import transactionUtils from '../transaction-utils';
 import { IEsploraApi } from './esplora-api.interface';
 import loadingIndicators from '../loading-indicators';
-import { TransactionExtended } from '../../mempool.interfaces';
+import { CpfpInfo, TransactionExtended } from '../../mempool.interfaces';
 import logger from '../../logger';
 import blocks from '../blocks';
 import bitcoinClient from './bitcoin-client';
@@ -129,17 +129,7 @@ class BitcoinRoutes {
       res.send('Service Unavailable');
       return;
     }
-    let minFee = 0;
-    if (req.query.min) {
-      try {
-        minFee = parseFloat(req.query.min as string);
-      } catch (e) {
-        res.statusCode = 400;
-        res.send('Invalid minimum fee');
-        return;
-      }
-    }
-    const result = feeApi.getPreciseRecommendedFee(minFee);
+    const result = feeApi.getPreciseRecommendedFee();
     res.json(result);
   }
 
@@ -153,17 +143,14 @@ class BitcoinRoutes {
   }
 
   private getTransactionTimes(req: Request, res: Response) {
-    if (!Array.isArray(req.query.txId)) {
-      handleError(req, res, 500, 'Not an array');
+    if (!req.query.txId || typeof req.query.txId !== 'object') {
+      handleError(req, res, 500, 'invalid txId format');
       return;
     }
     const txIds: string[] = [];
-    for (const _txId in req.query.txId) {
-      if (typeof req.query.txId[_txId] === 'string') {
-        const txid = req.query.txId[_txId].toString();
-        if (TXID_REGEX.test(txid)) {
-          txIds.push(txid);
-        }
+    for (const txid of Object.values(req.query.txId)) {
+      if (typeof txid === 'string' && TXID_REGEX.test(txid)) {
+        txIds.push(txid);
       }
     }
 
@@ -204,11 +191,11 @@ class BitcoinRoutes {
     const tx = mempool.getMempool()[req.params.txId];
     if (tx) {
       if (tx?.cpfpChecked) {
-        res.json({
-          ancestors: tx.ancestors,
+        const response: CpfpInfo & { acceleratedBy?: number[], acceleratedAt?: number, feeDelta?: number } = {
+          ancestors: tx.ancestors || [],
           bestDescendant: tx.bestDescendant || null,
-          descendants: tx.descendants || null,
-          effectiveFeePerVsize: tx.effectiveFeePerVsize || null,
+          descendants: tx.descendants,
+          effectiveFeePerVsize: tx.effectiveFeePerVsize,
           sigops: tx.sigops,
           fee: tx.fee,
           adjustedVsize: tx.adjustedVsize,
@@ -216,7 +203,14 @@ class BitcoinRoutes {
           acceleratedBy: tx.acceleratedBy || undefined,
           acceleratedAt: tx.acceleratedAt || undefined,
           feeDelta: tx.feeDelta || undefined,
-        });
+        };
+        if (config.MEMPOOL.CLUSTER_MEMPOOL && tx.clusterId != null) {
+          const cluster = mempool.clusterMempool?.getClusterForApi(req.params.txId);
+          if (cluster) {
+            response.cluster = cluster;
+          }
+        }
+        res.json(response);
         return;
       }
 
@@ -496,7 +490,7 @@ class BitcoinRoutes {
 
   private async getBlocks(req: Request, res: Response) {
     try {
-      if (['mainnet', 'testnet', 'signet', 'testnet4'].includes(config.MEMPOOL.NETWORK)) { // Bitcoin
+      if (['mainnet', 'testnet', 'signet', 'testnet4', 'regtest'].includes(config.MEMPOOL.NETWORK)) { // Bitcoin
         const height = req.params.height === undefined ? undefined : parseInt(req.params.height, 10);
         res.setHeader('Expires', new Date(Date.now() + 1000 * 60).toUTCString());
         res.json(await blocks.$getBlocks(height, 15));
@@ -510,7 +504,7 @@ class BitcoinRoutes {
 
   private async getBlocksByBulk(req: Request, res: Response) {
     try {
-      if (['mainnet', 'testnet', 'signet', 'testnet4'].includes(config.MEMPOOL.NETWORK) === false) { // Liquid - Not implemented
+      if (['mainnet', 'testnet', 'signet', 'testnet4', 'regtest'].includes(config.MEMPOOL.NETWORK) === false) { // Liquid - Not implemented
         handleError(req, res, 404, `This API is only available for Bitcoin networks`);
         return;
       }
@@ -552,7 +546,7 @@ class BitcoinRoutes {
 
   private async getChainTips(req: Request, res: Response) {
     try {
-      if (['mainnet', 'testnet', 'signet', 'testnet4'].includes(config.MEMPOOL.NETWORK)) { // Bitcoin
+      if (['mainnet', 'testnet', 'signet', 'testnet4', 'regtest'].includes(config.MEMPOOL.NETWORK)) { // Bitcoin
         res.setHeader('Expires', new Date(Date.now() + 1000 * 60).toUTCString());
         const tips = await chainTips.getChainTips();
         if (tips.length > 0) {
@@ -572,7 +566,7 @@ class BitcoinRoutes {
 
   private async getStaleTips(req: Request, res: Response) {
     try {
-      if (['mainnet', 'testnet', 'signet', 'testnet4'].includes(config.MEMPOOL.NETWORK)) { // Bitcoin
+      if (['mainnet', 'testnet', 'signet', 'testnet4', 'regtest'].includes(config.MEMPOOL.NETWORK)) { // Bitcoin
         res.setHeader('Expires', new Date(Date.now() + 1000 * 60).toUTCString());
         const tips = await chainTips.getStaleTips();
         if (tips.length > 0) {
@@ -677,6 +671,10 @@ class BitcoinRoutes {
       const addressData = await bitcoinApi.$getAddress(req.params.address);
       res.json(addressData);
     } catch (e) {
+      if (e instanceof Error && e.message === 'Invalid Bitcoin address') {
+        res.status(400).send(e.message);
+        return;
+      }
       if (e instanceof Error && e.message && (e.message.indexOf('too long') > 0 || e.message.indexOf('confirmed status') > 0)) {
         handleError(req, res, 413, e.message);
         return;
@@ -703,6 +701,10 @@ class BitcoinRoutes {
       const transactions = await bitcoinApi.$getAddressTransactions(req.params.address, lastTxId);
       res.json(transactions);
     } catch (e) {
+      if (e instanceof Error && e.message === 'Invalid Bitcoin address') {
+        res.status(400).send(e.message);
+        return;
+      }
       if (e instanceof Error && e.message && (e.message.indexOf('too long') > 0 || e.message.indexOf('confirmed status') > 0)) {
         handleError(req, res, 413, e.message);
         return;
@@ -725,6 +727,10 @@ class BitcoinRoutes {
       const addressData = await bitcoinApi.$getAddressUtxos(req.params.address);
       res.json(addressData);
     } catch (e) {
+      if (e instanceof Error && e.message === 'Invalid Bitcoin address') {
+        res.status(400).send(e.message);
+        return;
+      }
       if (e instanceof Error && e.message && (e.message.indexOf('too long') > 0 || e.message.indexOf('confirmed status') > 0)) {
         handleError(req, res, 413, e.message);
         return;

@@ -50,6 +50,13 @@ const ADDRESS_PREFIXES = {
     },
     bech32: 'tb1',
   },
+  regtest: {
+    base58: {
+      pubkey: ['m', 'n'],
+      script: '2',
+    },
+    bech32: 'bcrt1',
+  },
   liquid: {
     base58: {
       pubkey: ['P','Q'],
@@ -151,6 +158,7 @@ export class AddressTypeInfo {
     cloned.scripts = new Map(Array.from(this.scripts, ([key, value]) => [key, value?.clone()]));
     cloned.isMultisig = this.isMultisig;
     cloned.tapscript = this.tapscript;
+    cloned.simplicity = this.simplicity;
     return cloned;
   }
 
@@ -236,14 +244,15 @@ export class AddressTypeInfo {
     return this.compareTo(otherInfo);
   }
 
-  private processScript(script: ScriptInfo): void {
+  public processScript(script: ScriptInfo): boolean {
     if (this.scripts.has(script.key)) {
-      return;
+      return false;
     }
     this.scripts.set(script.key, script);
     if (script.template?.type === 'multisig') {
       this.isMultisig = { m: script.template['m'], n: script.template['n'] };
     }
+    return true;
   }
 }
 

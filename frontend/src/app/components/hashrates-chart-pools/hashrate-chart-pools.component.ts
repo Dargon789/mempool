@@ -110,7 +110,7 @@ export class HashrateChartPoolsComponent implements OnInit {
               map((response) => {
                 return {
                   blockCount: parseInt(response.headers.get('x-total-count'), 10),
-                }
+                };
               }),
               retryWhen((errors) => errors.pipe(
                 delay(60000)
@@ -174,11 +174,11 @@ export class HashrateChartPoolsComponent implements OnInit {
         name: name,
         inactiveColor: 'rgb(110, 112, 121)',
         textStyle: {
-          color: 'white',
+          color: 'var(--fg)',
         },
         icon: 'roundRect',
         itemStyle: {
-          color: poolsColor[name.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()],
+          color: poolsColor[name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()],
         },
       });
     }
