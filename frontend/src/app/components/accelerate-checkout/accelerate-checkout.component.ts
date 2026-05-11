@@ -12,6 +12,8 @@ import { IAuth, AuthServiceMempool } from '@app/services/auth.service';
 import { EnterpriseService } from '@app/services/enterprise.service';
 import { ApiService } from '@app/services/api.service';
 import { isDevMode } from '@angular/core';
+import { StorageService } from '@app/services/storage.service';
+import { ThemeService } from '../../services/theme.service';
 
 export type PaymentMethod = 'balance' | 'bitcoin' | 'cashapp' | 'applePay' | 'googlePay' | 'cardOnFile';
 
@@ -49,12 +51,13 @@ export const MIN_BID_RATIO = 1;
 export const DEFAULT_BID_RATIO = 2;
 export const MAX_BID_RATIO = 4;
 
-type CheckoutStep = 'quote' | 'summary' | 'checkout' | 'cashapp' | 'applepay' | 'googlepay' | 'cardonfile' | 'processing' | 'paid' | 'success';
+type CheckoutStep = 'quote' | 'summary' | 'checkout' | 'cashapp' | 'applepay' | 'googlepay' | 'cardonfile' | 'bitcoin' | 'processing' | 'paid' | 'success';
 
 @Component({
   selector: 'app-accelerate-checkout',
   templateUrl: './accelerate-checkout.component.html',
-  styleUrls: ['./accelerate-checkout.component.scss']
+  styleUrls: ['./accelerate-checkout.component.scss'],
+  standalone: false,
 })
 export class AccelerateCheckout implements OnInit, OnDestroy {
   @Input() tx: Transaction;
@@ -68,6 +71,7 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
   @Input() forceMobile: boolean = false;
   @Input() showDetails: boolean = false;
   @Input() noCTA: boolean = false;
+  @Input() partnerCode: string | undefined;
   @Output() unavailable = new EventEmitter<boolean>();
   @Output() completed = new EventEmitter<boolean>();
   @Output() hasDetails = new EventEmitter<boolean>();
@@ -130,6 +134,9 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
   loadingBtcpayInvoice = false;
   invoice = undefined;
 
+  themeStateSubscription: Subscription;
+  loadedTheme = 'default';
+
   constructor(
     public stateService: StateService,
     private apiService: ApiService,
@@ -139,8 +146,10 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
     private cd: ChangeDetectorRef,
     private authService: AuthServiceMempool,
     private enterpriseService: EnterpriseService,
+    private storageService: StorageService,
+    private themeService: ThemeService,
   ) {
-    this.isProdDomain = this.stateService.env.PROD_DOMAINS.indexOf(document.location.hostname) > -1;
+    this.isProdDomain = this.stateService.isProdDomain;
 
     // Check if Apple Pay available
     // https://developer.apple.com/documentation/apple_pay_on_the_web/apple_pay_js_api/checking_for_apple_pay_availability#overview
@@ -179,6 +188,14 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
         this.conversions = conversions;
       }
     );
+
+    this.themeStateSubscription = this.themeService.themeState$.subscribe((state) => {
+      if (state.loading) {
+        return;
+      }
+      this.loadedTheme = state.theme;
+      this.cd.markForCheck();
+    });
   }
 
   ngOnDestroy(): void {
@@ -187,6 +204,9 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
     }
     if (this.authSubscription$) {
       this.authSubscription$.unsubscribe();
+    }
+    if (this.themeStateSubscription) {
+      this.themeStateSubscription.unsubscribe();
     }
   }
 
@@ -205,18 +225,25 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
     if (this.timeoutTimer) {
       clearTimeout(this.timeoutTimer);
     }
+
     if (!this.estimate && ['quote', 'summary', 'checkout', 'processing'].includes(this.step)) {
       this.fetchEstimate();
     }
+
     if (this._step === 'checkout') {
       this.insertSquare();
       this.enterpriseService.goal(8);
       this.scrollToElementWithTimeout('acceleratePreviewAnchor', 'start', 100);
     }
+    
     if (this._step === 'checkout' && this.canPayWithBitcoin) {
       this.btcpayInvoiceFailed = false;
-      this.invoice = null;
-      this.requestBTCPayInvoice();
+      this.invoice = undefined;
+      this.requestBTCPayInvoice(); // preload invoice
+      // If only bitcoin available, go straight to showing the QR code (eg on self hosted)
+      if (this.canOnlyPayWithBitcoin && this.conversions) {
+        this.moveToStep('bitcoin');
+      }
     } else if (this._step === 'cashapp') {
       this.loadingCashapp = true;
       this.setupSquare();
@@ -233,6 +260,8 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
       this.loadingCardOnFile = true;
       this.setupSquare();
       this.scrollToElementWithTimeout('confirm-title', 'center', 100);
+    } else if (this._step === 'bitcoin') {
+      this.scrollToElementWithTimeout('confirm-title', 'nearest', 100);
     } else if (this._step === 'paid') {
       this.timePaid = Date.now();
       this.timeoutTimer = setTimeout(() => {
@@ -529,9 +558,12 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
                   tokenResult.token,
                   cardTag,
                   `accelerator-${this.tx.txid.substring(0, 15)}-${Math.round(new Date().getTime() / 1000)}`,
-                  costUSD
+                  costUSD,
+                  this.partnerCode
                 ).subscribe({
                   next: (response) => {
+                    this.storageService.removeItem('partnerCode'); // Consume localStorage partnerCode
+                    this.partnerCode = undefined;
                     this.accelerationResponse = response;
                     this.processing = false;
                     this.apiService.logAccelerationRequest$(this.tx.txid).subscribe();
@@ -589,7 +621,7 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
     if (this.processing) {
       return;
     }
-    
+
     this.processing = true;
 
         if (this.googlePay) {
@@ -651,9 +683,12 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
                 cardTag,
                 `accelerator-${this.tx.txid.substring(0, 15)}-${Math.round(new Date().getTime() / 1000)}`,
                 costUSD,
-                verificationToken.userChallenged
+                verificationToken.userChallenged,
+                this.partnerCode
               ).subscribe({
                 next: (response) => {
+                  this.storageService.removeItem('partnerCode'); // Consume localStorage partnerCode
+                  this.partnerCode = undefined;
                   this.accelerationResponse = response;
                   this.processing = false;
                   this.apiService.logAccelerationRequest$(this.tx.txid).subscribe();
@@ -707,7 +742,7 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
     if (this.processing) {
       return;
     }
-    
+
     this.processing = true;
 
         const costUSD = this.cost / 100_000_000 * this.conversions.USD;
@@ -720,11 +755,11 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
           return;
         }
         this.loadingCardOnFile = false;
-        
+
         try {
           this.isCheckoutLocked += 2;
           this.isTokenizing += 2;
-          
+
           const nameParts = cardOnFile.card.name.split(' ');
           const assumedGivenName = nameParts[0];
           const assumedFamilyName = nameParts.length > 1 ? nameParts[1] : undefined;
@@ -752,11 +787,13 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
             this.tx.txid,
             cardOnFile.card.card_id,
             verificationToken.token,
-            `accelerator-${this.tx.txid.substring(0, 15)}-${Math.round(new Date().getTime() / 1000)}`,
             costUSD,
-            verificationToken.userChallenged
+            verificationToken.userChallenged,
+            this.partnerCode
           ).subscribe({
             next: (response) => {
+              this.storageService.removeItem('partnerCode'); // Consume localStorage partnerCode
+              this.partnerCode = undefined;
               this.accelerationResponse = response;
               this.processing = false;
               this.apiService.logAccelerationRequest$(this.tx.txid).subscribe();
@@ -842,9 +879,12 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
               tokenResult.token,
               tokenResult.details.cashAppPay.cashtag,
               tokenResult.details.cashAppPay.referenceId,
-              costUSD
+              costUSD,
+              this.partnerCode
             ).subscribe({
               next: (response) => {
+                this.storageService.removeItem('partnerCode'); // Consume localStorage partnerCode
+                this.partnerCode = undefined;
                 this.accelerationResponse = response;
                 this.processing = false;
                 this.apiService.logAccelerationRequest$(this.tx.txid).subscribe();
@@ -908,7 +948,7 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
    */
   async requestBTCPayInvoice(): Promise<void> {
     this.loadingBtcpayInvoice = true;
-    this.servicesApiService.generateBTCPayAcceleratorInvoice$(this.tx.txid, this.userBid).pipe(
+    this.servicesApiService.generateBTCPayAcceleratorInvoice$(this.tx.txid, this.userBid, this.partnerCode).pipe(
       switchMap(response => {
         return this.servicesApiService.retrieveInvoice$(response.btcpayInvoiceId);
       }),
@@ -926,6 +966,8 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
   }
 
   bitcoinPaymentCompleted(): void {
+    this.storageService.removeItem('partnerCode'); // Consume localStorage partnerCode
+    this.partnerCode = undefined;
     this.apiService.logAccelerationRequest$(this.tx.txid).subscribe();
     this.audioService.playSound('ascend-chime-cartoon');
     this.estimateSubscription.unsubscribe();
@@ -982,6 +1024,10 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
 
   get couldPay(): boolean {
     return this.couldPayWithBalance || this.couldPayWithBitcoin || this.couldPayWithCashapp || this.couldPayWithApplePay || this.couldPayWithGooglePay;
+  }
+
+  get canOnlyPayWithBitcoin(): boolean {
+    return this.canPayWithBitcoin && !this.canPayWithApplePay && !this.canPayWithBalance && !this.canPayWithCardOnFile && !this.canPayWithCashapp && !this.canPayWithGooglePay
   }
 
   get canPayWithBitcoin(): boolean {
@@ -1071,6 +1117,10 @@ export class AccelerateCheckout implements OnInit, OnDestroy {
 
   get timeSincePaid(): number {
     return Date.now() - this.timePaid;
+  }
+
+  get isLightMode(): boolean {
+    return this.loadedTheme === 'nymkappa';
   }
 
   @HostListener('window:resize', ['$event'])
