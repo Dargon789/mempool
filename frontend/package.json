@@ -59,7 +59,7 @@
     "cypress:run:ci:parameterized": "node update-config.js TESTNET_ENABLED=true TESTNET4_ENABLED=true SIGNET_ENABLED=true LIQUID_ENABLED=true ITEMS_PER_PAGE=25 && npm run generate-config && start-server-and-test serve:parameterized 4200 cypress:run:record"
   },
   "dependencies": {
-    "@angular-devkit/build-angular": "^20.3.20",
+    "@angular-devkit/build-angular": "^20.3.23",
     "@angular/animations": "^20.3.18",
     "@angular/cli": "^20.3.20",
     "@angular/common": "^20.3.18",
@@ -71,7 +71,7 @@
     "@angular/platform-browser-dynamic": "^20.3.18",
     "@angular/platform-server": "^20.3.18",
     "@angular/router": "^20.3.18",
-    "@angular/ssr": "^20.3.18",
+    "@angular/ssr": "^20.3.25",
     "@fortawesome/angular-fontawesome": "^3.0.0",
     "@fortawesome/fontawesome-common-types": "~6.7.2",
     "@fortawesome/fontawesome-svg-core": "~6.7.2",
@@ -82,7 +82,7 @@
     "bootstrap": "~5.3.8",
     "clipboard": "^2.0.11",
     "domino": "^2.1.6",
-    "echarts": "~5.4.0",
+    "echarts": "~5.5.1",
     "ngx-echarts": "~20.0.2",
     "ngx-infinite-scroll": "^20.0.0",
     "qrcode": "1.5.1",
