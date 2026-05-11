@@ -59,7 +59,7 @@ interface DatabaseBlock {
   utxoSetChange: number;
   utxoSetSize: number;
   totalInputAmt: number;
-  firstSeen: number;
+  firstSeen: string; // UNIX_TIMESTAMP() returns a string when applied to datetime(6)
   stale: boolean;
 }
 
@@ -114,6 +114,7 @@ class BlocksRepository {
 
   /**
    * Save indexed block data in the database
+   * @asyncSafe
    */
   public async $saveBlockInDatabase(block: BlockExtended) {
     const truncatedCoinbaseSignature = block?.extras?.coinbaseSignature?.substring(0, 500);
@@ -131,7 +132,7 @@ class BlocksRepository {
         total_inputs,       total_outputs,            total_input_amt,   total_output_amt,
         fee_percentiles,    segwit_total_txs,         segwit_total_size, segwit_total_weight,
         median_fee_amt,     coinbase_signature_ascii, definition_hash,   index_version,
-        stale
+        stale,              first_seen
       ) VALUE (
         ?, ?, FROM_UNIXTIME(?), ?,
         ?, ?, ?, ?,
@@ -143,7 +144,7 @@ class BlocksRepository {
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
-        ?
+        ?, FROM_UNIXTIME(?)
       )`;
 
       const poolDbId = await PoolsRepository.$getPoolByUniqueId(block.extras.pool.id);
@@ -193,6 +194,7 @@ class BlocksRepository {
         poolsUpdater.currentSha,
         BlocksRepository.version,
         (block.stale ? 1 : 0),
+        block.extras.firstSeen === null ? 1 : block.extras.firstSeen // Sentinel value 1 indicates that we could not find first seen time
       ];
 
       await DB.query(query, params);
@@ -217,9 +219,10 @@ class BlocksRepository {
 
   /**
    * Save newly indexed data from core coinstatsindex
-   * 
-   * @param utxoSetSize 
-   * @param totalInputAmt 
+   *
+   * @param utxoSetSize
+   * @param totalInputAmt
+   * @asyncSafe
    */
   public async $updateCoinStatsIndexData(blockHash: string, utxoSetSize: number,
     totalInputAmt: number
@@ -245,9 +248,10 @@ class BlocksRepository {
   /**
    * Update missing fee amounts fields
    *
-   * @param blockHash 
-   * @param feeAmtPercentiles 
-   * @param medianFeeAmt 
+   * @param blockHash
+   * @param feeAmtPercentiles
+   * @param medianFeeAmt
+   * @asyncSafe
    */
   public async $updateFeeAmounts(blockHash: string, feeAmtPercentiles, medianFeeAmt) : Promise<void> {
     try {
@@ -270,9 +274,14 @@ class BlocksRepository {
 
   /**
    * Get all block height that have not been indexed between [startHeight, endHeight]
+   * @asyncSafe
    */
   public async $getMissingBlocksBetweenHeights(startHeight: number, endHeight: number): Promise<number[]> {
-    if (startHeight < endHeight) {
+    // Ensure startHeight is the lower value and endHeight is the higher value
+    const minHeight = Math.min(startHeight, endHeight);
+    const maxHeight = Math.max(startHeight, endHeight);
+
+    if (minHeight === maxHeight) {
       return [];
     }
 
@@ -280,13 +289,13 @@ class BlocksRepository {
       const [rows]: any[] = await DB.query(`
         SELECT height
         FROM blocks
-        WHERE height <= ? AND height >= ? AND stale = 0
-        ORDER BY height DESC;
-      `, [startHeight, endHeight]);
+        WHERE height >= ? AND height <= ? AND stale = 0
+        ORDER BY height ASC;
+      `, [minHeight, maxHeight]);
 
       const indexedBlockHeights: number[] = [];
       rows.forEach((row: any) => { indexedBlockHeights.push(row.height); });
-      const seekedBlocks: number[] = Array.from(Array(startHeight - endHeight + 1).keys(), n => n + endHeight).reverse();
+      const seekedBlocks: number[] = Array.from(Array(maxHeight - minHeight + 1).keys(), n => n + minHeight);
       const missingBlocksHeights = seekedBlocks.filter(x => indexedBlockHeights.indexOf(x) === -1);
 
       return missingBlocksHeights;
@@ -298,6 +307,7 @@ class BlocksRepository {
 
   /**
    * Get empty blocks for one or all pools
+   * @asyncSafe
    */
   public async $countEmptyBlocks(poolId: number | null, interval: string | null = null): Promise<any> {
     interval = Common.getSqlInterval(interval);
@@ -330,6 +340,7 @@ class BlocksRepository {
 
   /**
    * Return most recent block height
+   * @asyncSafe
    */
   public async $mostRecentBlockHeight(): Promise<number> {
     try {
@@ -343,6 +354,7 @@ class BlocksRepository {
 
   /**
    * Get blocks count for a period
+   * @asyncSafe
    */
   public async $blockCount(poolId: number | null, interval: string | null = null): Promise<number> {
     interval = Common.getSqlInterval(interval);
@@ -376,6 +388,7 @@ class BlocksRepository {
    * @param from - The oldest timestamp
    * @param to - The newest timestamp
    * @returns
+   * @asyncSafe
    */
   public async $blockCountBetweenTimestamp(poolId: number | null, from: number, to: number): Promise<number> {
     const params: any[] = [];
@@ -403,10 +416,11 @@ class BlocksRepository {
 
   /**
    * Get blocks count for a period
+   * @asyncSafe
    */
    public async $blockCountBetweenHeight(startHeight: number, endHeight: number): Promise<number> {
     const params: any[] = [];
-    let query = `SELECT count(height) as blockCount
+    const query = `SELECT count(height) as blockCount
       FROM blocks
       WHERE height <= ${startHeight} AND height >= ${endHeight} AND stale = 0`;
 
@@ -421,6 +435,7 @@ class BlocksRepository {
 
   /**
    * Get average block health for all blocks for a single pool
+   * @asyncSafe
    */
   public async $getAvgBlockHealthPerPoolId(poolId: number): Promise<number | null> {
     const params: any[] = [];
@@ -446,6 +461,7 @@ class BlocksRepository {
 
   /**
    * Get average block health for all blocks for a single pool
+   * @asyncSafe
    */
   public async $getTotalRewardForPoolId(poolId: number): Promise<number> {
     const params: any[] = [];
@@ -470,6 +486,7 @@ class BlocksRepository {
 
   /**
    * Get the oldest indexed block
+   * @asyncSafe
    */
   public async $oldestBlockTimestamp(): Promise<number> {
     const query = `SELECT UNIX_TIMESTAMP(blockTimestamp) as blockTimestamp
@@ -494,6 +511,7 @@ class BlocksRepository {
 
   /**
    * Get blocks mined by a specific mining pool
+   * @asyncSafe
    */
   public async $getBlocksByPool(slug: string, startHeight?: number): Promise<BlockExtended[]> {
     const pool = await PoolsRepository.$getPool(slug);
@@ -534,6 +552,7 @@ class BlocksRepository {
 
   /**
    * Get one block by height
+   * @asyncSafe
    */
   public async $getBlockByHeight(height: number): Promise<BlockExtended | null> {
     try {
@@ -582,6 +601,7 @@ class BlocksRepository {
 
   /**
    * Return blocks difficulty
+   * @asyncSafe
    */
   public async $getBlocksDifficulty(): Promise<object[]> {
     try {
@@ -597,6 +617,7 @@ class BlocksRepository {
    * Get the first block at or directly after a given timestamp
    * @param timestamp number unix time in seconds
    * @returns The height and timestamp of a block (timestamp might vary from given timestamp)
+   * @asyncSafe
    */
   public async $getBlockHeightFromTimestamp(
     timestamp: number,
@@ -625,6 +646,7 @@ class BlocksRepository {
 
   /**
    * Get general block stats
+   * @asyncSafe
    */
   public async $getBlockStats(blockCount: number): Promise<any> {
     try {
@@ -648,12 +670,14 @@ class BlocksRepository {
 
   /**
    * Check if the canonical chain of blocks is valid and fix it if needed
+   * @asyncSafe
    */
   public async $validateChain(): Promise<boolean> {
     try {
       const start = new Date().getTime();
       const tip = await bitcoinApi.$getBlockHashTip();
       let firstBadBlockHeight: number | null = null;
+      let firstBadBlockTimestamp: number | null = null;
       const [blocks]: any[] = await DB.query(`
         SELECT
           height,
@@ -664,6 +688,9 @@ class BlocksRepository {
         FROM blocks
         ORDER BY height DESC
       `);
+      if (!blocks || blocks.length === 0) {
+        throw new Error('Cannot validate chain: no indexed blocks in database'); 
+      }
       const blocksByHash = {};
       const blocksByHeight = {};
       let minHeight = Infinity;
@@ -680,7 +707,11 @@ class BlocksRepository {
       // ensure that indexed blocks are correctly classified as stale or canonical
       // iterate back to genesis, resetting canonical status where necessary
       let hash = tip;
-      const tipHeight = blocksByHash[hash].height || (await bitcoinApi.$getBlock(hash))?.height;
+      const indexedTip = blocksByHash[hash];
+      const tipHeight = indexedTip?.height ?? (await bitcoinApi.$getBlock(hash))?.height;
+      if (typeof tipHeight !== 'number') {
+         throw new Error(`Cannot validate chain: could not resolve tip block height for ${hash} from index or node`);
+      }
 
       // stop at the last canonical block we're supposed to have indexed already
       let lastIndexedBlockHeight = minHeight;
@@ -702,6 +733,7 @@ class BlocksRepository {
           // block is marked stale, but shouldn't be
           await this.$setCanonicalBlockAtHeight(block.hash, height);
           firstBadBlockHeight = height;
+          firstBadBlockTimestamp = block.timestamp;
         }
         hash = block?.previous_block_hash;
         if (!hash) {
@@ -718,7 +750,9 @@ class BlocksRepository {
 
       if (firstBadBlockHeight != null) {
         logger.warn(`Chain divergence detected at block ${firstBadBlockHeight}`);
-        await HashratesRepository.$deleteHashratesFromTimestamp(blocksByHash[firstBadBlockHeight].timestamp - 604800);
+        if (firstBadBlockTimestamp != null) {
+          await HashratesRepository.$deleteHashratesFromTimestamp(firstBadBlockTimestamp - 604800);
+        }
         await DifficultyAdjustmentsRepository.$deleteAdjustementsFromHeight(firstBadBlockHeight);
         return false;
       }
@@ -733,6 +767,7 @@ class BlocksRepository {
 
   /**
    * Get the historical averaged block fees
+   * @asyncSafe
    */
   public async $getHistoricalBlockFees(div: number, interval: string | null, timespan?: {from: number, to: number}): Promise<any> {
     try {
@@ -765,6 +800,7 @@ class BlocksRepository {
 
   /**
    * Get the historical averaged block rewards
+   * @asyncSafe
    */
   public async $getHistoricalBlockRewards(div: number, interval: string | null): Promise<any> {
     try {
@@ -795,6 +831,7 @@ class BlocksRepository {
 
   /**
    * Get the historical averaged block fee rate percentiles
+   * @asyncSafe
    */
    public async $getHistoricalBlockFeeRates(div: number, interval: string | null): Promise<any> {
     try {
@@ -827,6 +864,7 @@ class BlocksRepository {
 
   /**
    * Get the historical averaged block sizes
+   * @asyncSafe
    */
    public async $getHistoricalBlockSizes(div: number, interval: string | null): Promise<any> {
     try {
@@ -853,6 +891,7 @@ class BlocksRepository {
 
   /**
    * Get the historical averaged block weights
+   * @asyncSafe
    */
    public async $getHistoricalBlockWeights(div: number, interval: string | null): Promise<any> {
     try {
@@ -880,6 +919,7 @@ class BlocksRepository {
   /**
    * Get a list of blocks that have been indexed
    * (includes stale blocks)
+   * @asyncSafe
    */
   public async $getIndexedBlocks(): Promise<{ height: number, hash: string, stale: boolean }[]> {
     try {
@@ -893,6 +933,7 @@ class BlocksRepository {
 
   /**
    * Get a list of blocks that have not had CPFP data indexed
+   * @asyncSafe
    */
    public async $getCPFPUnindexedBlocks(): Promise<number[]> {
     try {
@@ -926,6 +967,7 @@ class BlocksRepository {
 
   /**
    * Return the oldest block  from a consecutive chain of block from the most recent one
+   * @asyncSafe
    */
   public async $getOldestConsecutiveBlock(): Promise<any> {
     try {
@@ -944,6 +986,7 @@ class BlocksRepository {
 
   /**
    * Get all blocks which have not be linked to a price yet
+   * @asyncSafe
    */
   public async $getBlocksWithoutPrice(): Promise<object[]> {
     try {
@@ -965,6 +1008,7 @@ class BlocksRepository {
 
   /**
    * Save block price by batch
+   * @asyncSafe
    */
    public async $saveBlockPrices(blockPrices: BlockPrice[]): Promise<void> {
     try {
@@ -986,6 +1030,7 @@ class BlocksRepository {
 
   /**
    * Get all indexed blocsk with missing coinstatsindex data
+   * @asyncSafe
    */
   public async $getBlocksMissingCoinStatsIndex(maxHeight: number, minHeight: number): Promise<any> {
     try {
@@ -1005,6 +1050,7 @@ class BlocksRepository {
   /**
    * Get all indexed blocks with missing coinbase addresses
    * (includes stale blocks)
+   * @asyncSafe
    */
   public async $getBlocksWithoutCoinbaseAddresses(): Promise<any> {
     try {
@@ -1024,9 +1070,10 @@ class BlocksRepository {
 
   /**
    * Save indexed median fee to avoid recomputing it later
-   * 
-   * @param id 
-   * @param feePercentiles 
+   *
+   * @param id
+   * @param feePercentiles
+   * @asyncSafe
    */
   public async $saveFeePercentilesForBlockId(id: string, feePercentiles: number[]): Promise<void> {
     try {
@@ -1043,9 +1090,10 @@ class BlocksRepository {
 
   /**
    * Save indexed effective fee statistics
-   * 
-   * @param id 
-   * @param feeStats 
+   *
+   * @param id
+   * @param feeStats
+   * @asyncSafe
    */
   public async $saveEffectiveFeeStats(id: string, feeStats: EffectiveFeeStats): Promise<void> {
     try {
@@ -1062,9 +1110,10 @@ class BlocksRepository {
 
   /**
    * Save coinbase addresses
-   * 
+   *
    * @param id
    * @param addresses
+   * @asyncSafe
    */
   public async $saveCoinbaseAddresses(id: string, addresses: string[]): Promise<void> {
     try {
@@ -1081,9 +1130,10 @@ class BlocksRepository {
 
   /**
    * Save pool
-   * 
+   *
    * @param id
    * @param poolId
+   * @asyncSafe
    */
   public async $savePool(id: string, poolId: number): Promise<void> {
     try {
@@ -1099,26 +1149,62 @@ class BlocksRepository {
   }
 
   /**
-   * Save block first seen time
-   * 
-   * @param id 
+   * Save block first seen times
+   *
+   * @param results
+   * @asyncSafe
    */
-  public async $saveFirstSeenTime(id: string, firstSeen: number): Promise<void> {
+  public async $saveFirstSeenTimes(results: { hash: string; firstSeen: number | null }[]): Promise<void> {
+    if (!results.length) {
+      return;
+    }
+    const CHUNK_SIZE = 1000;
+    for (let i = 0; i < results.length; i += CHUNK_SIZE) {
+      const chunk = results.slice(i, i + CHUNK_SIZE);
+      const params: Array<string | number> = [];
+      const selects = chunk.map(() => 'SELECT ? AS hash, FROM_UNIXTIME(?) AS first_seen').join(' UNION ALL ');
+      for (const { hash, firstSeen } of chunk) {
+        params.push(hash, firstSeen === null ? 1 : firstSeen); // Sentinel value 1 indicates that we could not find first seen time
+      }
+      const query = `
+        UPDATE blocks AS b
+        JOIN (
+          ${selects}
+        ) AS updates ON updates.hash = b.hash
+        SET b.first_seen = updates.first_seen
+      `;
+      try {
+        await DB.query(query, params);
+      } catch (e) {
+        logger.err(`Cannot batch update block first seen times. Reason: ` + (e instanceof Error ? e.message : e));
+        throw e;
+      }
+    }
+  }
+
+  /**
+   * Get all blocks which do not have a first seen time yet
+   * 
+   * @param includeAlreadyTried Include blocks we have already tried to fetch first seen time for, identified by sentinel value 1
+   */
+  public async $getBlocksWithoutFirstSeen(includeAlreadyTried = false): Promise<{ hash: string; timestamp: number }[]> {
     try {
-      await DB.query(`
-        UPDATE blocks SET first_seen = FROM_UNIXTIME(?)
-        WHERE hash = ?`,
-        [firstSeen, id]
-      );
-    } catch (e) {
-      logger.err(`Cannot update block first seen time. Reason: ` + (e instanceof Error ? e.message : e));
+      const [rows]: any[] = await DB.query(`
+        SELECT hash, UNIX_TIMESTAMP(blockTimestamp) as timestamp
+        FROM blocks
+        WHERE first_seen IS NULL
+        ${includeAlreadyTried ? ' OR first_seen = FROM_UNIXTIME(1)' : ''}
+      `);
+      return rows;
+    } catch (e: any) {
+      logger.err(`Cannot fetch block first seen from db. Reason: ` + (e instanceof Error ? e.message : e));
       throw e;
     }
   }
 
   /**
    * Change which block at a height belongs to the canonical chain
-   * 
+   *
    * @param hash
    * @param height
    */
@@ -1147,8 +1233,9 @@ class BlocksRepository {
   /**
    * Convert a mysql row block into a BlockExtended. Note that you
    * must provide the correct field into dbBlk object param
-   * 
-   * @param dbBlk 
+   *
+   * @param dbBlk
+   * @asyncUnsafe
    */
   private async formatDbBlockIntoExtendedBlock(dbBlk: DatabaseBlock): Promise<BlockExtended> {
     const blk: Partial<BlockExtended> = {};
@@ -1201,7 +1288,14 @@ class BlocksRepository {
     extras.utxoSetSize = dbBlk.utxoSetSize;
     extras.totalInputAmt = dbBlk.totalInputAmt;
     extras.virtualSize = dbBlk.weight / 4.0;
-    extras.firstSeen = dbBlk.firstSeen;
+
+    extras.firstSeen = null;
+    if (config.CORE_RPC.DEBUG_LOG_PATH) {
+      const dbFirstSeen = parseFloat(dbBlk.firstSeen);
+      if (dbFirstSeen > 1) { // Sentinel value 1 indicates that we could not find first seen time
+        extras.firstSeen = dbFirstSeen;
+      }
+    }
 
     // Re-org can happen after indexing so we need to always get the
     // latest state from core
@@ -1268,6 +1362,7 @@ class BlocksRepository {
   }
 
   // migration to fix median fee bug
+  /** @asyncSafe */
   private async $migrateBlocksToV1(): Promise<number> {
     let blocksMigrated = 0;
     try {
