@@ -14,10 +14,8 @@ currently being supported with security updates.
 
 ## Reporting a Vulnerability
 
-We take all security bugs in Mempool seriously. We appreciate your efforts and responsible disclosure and will make every effort to acknowledge your contributions.
+Use this section to tell people how to report a vulnerability.
 
-To report a security vulnerability, please use the [GitHub Security Advisory "Report a Vulnerability"](https://github.com/mempool/mempool/security/advisories/new) feature.
-
-Alternatively, you can email us at security@mempool.space.
-
-You should receive a response within 48 hours. If the issue is confirmed, we will release a patch as soon as possible depending on complexity.
+Tell them where to go, how often they can expect to get an update on a
+reported vulnerability, what to expect if the vulnerability is accepted or
+declined, etc.

@@ -1,0 +1,23 @@
+name: Rust
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+  run: cargo build --release --manifest-path rust/Cargo.toml
+  working-directory: rust
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build with Cargo
+      run: cargo build --release --manifest-path rust/gbt/Cargo.toml
+      working-directory: rust/gbt
