@@ -32,6 +32,7 @@ interface ComparisonStats {
 @Component({
   selector: 'app-block',
   templateUrl: './block.component.html',
+  standalone: false,
   styleUrls: ['./block.component.scss'],
   styles: [`
     .loadingGraphs {
@@ -568,7 +569,7 @@ export class BlockComponent implements OnInit, OnDestroy {
       } else {
         this.showPreviousBlocklink = true;
       }
-      if (this.latestBlock.height && this.latestBlock.height === this.blockHeight) {
+      if (this.latestBlock.height != null && this.latestBlock.height === this.blockHeight) {
         this.showNextBlocklink = false;
       } else {
         this.showNextBlocklink = true;
