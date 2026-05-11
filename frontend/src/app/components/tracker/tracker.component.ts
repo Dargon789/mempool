@@ -32,7 +32,7 @@ import { TrackerStage } from '@components/tracker/tracker-bar.component';
 import { MiningService, MiningStats } from '@app/services/mining.service';
 import { ETA, EtaService } from '@app/services/eta.service';
 import { getTransactionFlags, getUnacceleratedFeeRate } from '@app/shared/transaction.utils';
-import { RelativeUrlPipe } from '@app/shared/pipes/relative-url/relative-url.pipe';
+import { StorageService } from '@app/services/storage.service';
 
 
 interface Pool {
@@ -56,6 +56,7 @@ interface AuditStatus {
   selector: 'app-tracker',
   templateUrl: './tracker.component.html',
   styleUrls: ['./tracker.component.scss'],
+  standalone: false,
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class TrackerComponent implements OnInit, OnDestroy {
@@ -124,6 +125,7 @@ export class TrackerComponent implements OnInit, OnDestroy {
   accelerationFlowCompleted = false;
   paymentReceiptUrl: string | null = null;
   auditEnabled: boolean = this.stateService.env.AUDIT && this.stateService.env.BASE_MODULE === 'mempool' && this.stateService.env.MINING_DASHBOARD === true;
+  partnerCode: string | undefined;
 
   enterpriseInfo: any;
   enterpriseInfo$: Subscription;
@@ -146,11 +148,21 @@ export class TrackerComponent implements OnInit, OnDestroy {
     private router: Router,
     private cd: ChangeDetectorRef,
     private zone: NgZone,
+    private storageService: StorageService,
     @Inject(ZONE_SERVICE) private zoneService: any,
   ) {}
 
   ngOnInit() {
     this.onResize();
+
+    // Accelerator partner code in fragment
+    const fragmentsParams = new URLSearchParams(window.location.hash.slice(1));
+    this.partnerCode = fragmentsParams.get('partnerCode') ?? this.storageService.getValue('partnerCode') ?? undefined;
+    if (this.partnerCode) {
+      this.storageService.setValue('partnerCode', this.partnerCode);
+      // Cleanup partnerCode from url after storing it in localStorage to avoid re-use upon page reload
+      window.location.hash = window.location.hash.replace(`&partnerCode=${this.partnerCode}`, '').replace(`#partnerCode=${this.partnerCode}`, '');
+    }
 
     this.acceleratorAvailable = this.stateService.env.OFFICIAL_MEMPOOL_SPACE && this.stateService.env.ACCELERATOR && this.stateService.network === '';
 
@@ -641,7 +653,7 @@ export class TrackerComponent implements OnInit, OnDestroy {
       }),
       tap(eta => {
         if (this.replaced) {
-          this.trackerStage = 'replaced'
+          this.trackerStage = 'replaced';
         } else if (eta?.blocks === 0) {
           this.trackerStage = 'next';
         } else if (eta?.blocks < 3){
@@ -650,7 +662,7 @@ export class TrackerComponent implements OnInit, OnDestroy {
           this.trackerStage = 'pending';
         }
       })
-    )
+    );
   }
 
   handleLoadElectrsTransactionError(error: any): Observable<any> {

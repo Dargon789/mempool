@@ -23,6 +23,7 @@ interface AccelerationTotal {
   selector: 'app-pool',
   templateUrl: './pool.component.html',
   styleUrls: ['./pool.component.scss'],
+  standalone: false,
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class PoolComponent implements OnInit {
@@ -221,9 +222,9 @@ export class PoolComponent implements OnInit {
               hashrateString = `${tick.marker} ${tick.seriesName}: ${this.amountShortenerPipe.transform(tick.data[1], 3, 'H/s', false, true)}<br>`;
             } else if (tick.seriesIndex === 1) {
               dominanceString = `${tick.marker} ${tick.seriesName}: ${formatNumber(tick.data[1], this.locale, '1.0-2')}%`;
-            }             
+            }
           }
-          
+
           return `
             <b style="color: white; margin-left: 18px">${ticks[0].axisValueLabel}</b><br>
             <span>${hashrateString}</span>
@@ -244,7 +245,7 @@ export class PoolComponent implements OnInit {
             name: $localize`:@@79a9dc5b1caca3cbeb1733a19515edacc5fc7920:Hashrate`,
             inactiveColor: 'rgb(110, 112, 121)',
             textStyle: {
-              color: 'white',
+              color: 'var(--fg)',
             },
             icon: 'roundRect',
             itemStyle: {
@@ -255,7 +256,7 @@ export class PoolComponent implements OnInit {
             name: $localize`:mining.pool-dominance:Pool Dominance`,
             inactiveColor: 'rgb(110, 112, 121)',
             textStyle: {
-              color: 'white',
+              color: 'var(--fg)',
             },
             icon: 'roundRect',
           },
@@ -282,7 +283,7 @@ export class PoolComponent implements OnInit {
           axisLabel: {
             color: 'rgb(110, 112, 121)',
             formatter: (val) => {
-              return `${val}%`
+              return `${val}%`;
             }
           },
           splitLine: {
@@ -324,7 +325,7 @@ export class PoolComponent implements OnInit {
         moveOnMouseMove: false,
       }, {
         fillerColor: '#aaaaff15',
-        borderColor: '#ffffff88',
+        borderColor: 'var(--transparent-fg)',
         showDetail: false,
         show: true,
         type: 'slider',
@@ -335,7 +336,7 @@ export class PoolComponent implements OnInit {
         right: 15,
         selectedDataBackground: {
           lineStyle: {
-            color: '#fff',
+            color: 'var(--fg)',
             opacity: 0.45,
           },
           areaStyle: {

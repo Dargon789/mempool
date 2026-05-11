@@ -32,6 +32,7 @@ const periodSeconds = {
       z-index: 99;
     }
   `],
+  standalone: false,
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class AddressGraphComponent implements OnChanges, OnDestroy {
@@ -130,7 +131,7 @@ export class AddressGraphComponent implements OnChanges, OnDestroy {
                 }
               }),
               map(() => [redraw, extendedSummary, conversions])
-            )
+            );
           } else {
             return of([redraw, addressSummary, conversions]);
           }
@@ -215,7 +216,7 @@ export class AddressGraphComponent implements OnChanges, OnDestroy {
             name: $localize`:@@7e69426bd97a606d8ae6026762858e6e7c86a1fd:Balance`,
             inactiveColor: 'var(--grey)',
             textStyle: {
-              color: 'white',
+              color: 'var(--fg)',
             },
             icon: 'roundRect',
           },
@@ -223,7 +224,7 @@ export class AddressGraphComponent implements OnChanges, OnDestroy {
             name: 'Fiat',
             inactiveColor: 'var(--grey)',
             textStyle: {
-              color: 'white',
+              color: 'var(--fg)',
             },
             icon: 'roundRect',
           }
@@ -323,7 +324,7 @@ export class AddressGraphComponent implements OnChanges, OnDestroy {
             show: this.showYAxis,
             color: 'rgb(110, 112, 121)',
             formatter: (val): string => {
-              let valSpan = maxValue - (this.period === 'all' ? 0 : minValue);
+              const valSpan = maxValue - (this.period === 'all' ? 0 : minValue);
               if (valSpan > 100_000_000_000) {
                 return `${this.amountShortenerPipe.transform(Math.round(val / 100_000_000), 0, undefined, true)} BTC`;
               }
@@ -412,7 +413,7 @@ export class AddressGraphComponent implements OnChanges, OnDestroy {
         right: this.adjustedRight,
         selectedDataBackground: {
           lineStyle: {
-            color: '#fff',
+            color: 'var(--fg)',
             opacity: 0.45,
           },
         },
@@ -537,7 +538,7 @@ export class AddressGraphComponent implements OnChanges, OnDestroy {
         top: this.image ? imgHeight + 10 : 0,
         z: 100,
         style: {
-          fill: '#fff',
+          fill: 'var(--fg)',
           text: this.label,
           font: this.isMobile() ? '18px sans-serif' : '24px sans-serif',
           textAlign: 'center'
