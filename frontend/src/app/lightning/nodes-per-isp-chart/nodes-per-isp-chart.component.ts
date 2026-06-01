@@ -141,7 +141,7 @@ export class NodesPerISPChartComponent implements OnInit {
       }
       data.push({
         value: this.sortBy === 'capacity' ? isp[7] : isp[6],
-        name: isp[1].replace(/&/g, '') + (isMobile() || this.widget ? `` : ` (${this.sortBy === 'capacity' ? isp[7] : isp[6]}%)`),
+        name: (isp[1] || '').replace(/&/g, '') + (isMobile() || this.widget ? '' : ' (' + (this.sortBy === 'capacity' ? isp[7] : isp[6]) + '%)'),
         label: {
           overflow: 'truncate',
           width: isMobile() ? 75 : this.widget ? 125 : 250,
