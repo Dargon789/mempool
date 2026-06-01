@@ -1,7 +1,7 @@
 import DB from '../database';
 import logger from '../logger';
 import bitcoinApi from '../api/bitcoin/bitcoin-api-factory';
-import { BlockAudit, AuditScore, TransactionAudit, TransactionStripped } from '../mempool.interfaces';
+import { BlockAudit, AuditScore, TransactionAudit, TransactionStripped, TemplateAlgorithm } from '../mempool.interfaces';
 
 interface MigrationAudit {
   version: number,
@@ -15,10 +15,11 @@ interface MigrationAudit {
 }
 
 class BlocksAuditRepositories {
+  /** @asyncSafe */
   public async $saveAudit(audit: BlockAudit): Promise<void> {
     try {
-      await DB.query(`INSERT INTO blocks_audits(version, time, height, hash, unseen_txs, missing_txs, added_txs, prioritized_txs, fresh_txs, sigop_txs, fullrbf_txs, accelerated_txs, match_rate, expected_fees, expected_weight)
-        VALUE (?, FROM_UNIXTIME(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [audit.version, audit.time, audit.height, audit.hash, JSON.stringify(audit.unseenTxs), JSON.stringify(audit.missingTxs),
+      await DB.query(`INSERT INTO blocks_audits(version, template_algo, time, height, hash, unseen_txs, missing_txs, added_txs, prioritized_txs, fresh_txs, sigop_txs, fullrbf_txs, accelerated_txs, match_rate, expected_fees, expected_weight)
+        VALUE (?, ?, FROM_UNIXTIME(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [audit.version, audit.templateAlgorithm ?? 0, audit.time, audit.height, audit.hash, JSON.stringify(audit.unseenTxs), JSON.stringify(audit.missingTxs),
           JSON.stringify(audit.addedTxs), JSON.stringify(audit.prioritizedTxs), JSON.stringify(audit.freshTxs), JSON.stringify(audit.sigopTxs), JSON.stringify(audit.fullrbfTxs), JSON.stringify(audit.acceleratedTxs), audit.matchRate, audit.expectedFees, audit.expectedWeight]);
     } catch (e: any) {
       if (e.errno === 1062) { // ER_DUP_ENTRY - This scenario is possible upon node backend restart
@@ -29,6 +30,7 @@ class BlocksAuditRepositories {
     }
   }
 
+  /** @asyncSafe */
   public async $setSummary(hash: string, expectedFees: number, expectedWeight: number) {
     try {
       await DB.query(`
@@ -42,6 +44,7 @@ class BlocksAuditRepositories {
     }
   }
 
+  /** @asyncSafe */
   public async $getBlocksHealthHistory(div: number, interval: string | null): Promise<any> {
     try {
       let query = `SELECT UNIX_TIMESTAMP(time) as time, height, match_rate FROM blocks_audits`;
@@ -60,6 +63,7 @@ class BlocksAuditRepositories {
     }
   }
 
+  /** @asyncSafe */
   public async $getBlocksHealthCount(): Promise<number> {
     try {
       const [rows] = await DB.query(`SELECT count(hash) as count FROM blocks_audits`);
@@ -70,11 +74,13 @@ class BlocksAuditRepositories {
     }
   }
 
+  /** @asyncSafe */
   public async $getBlockAudit(hash: string): Promise<BlockAudit | null> {
     try {
       const [rows]: any[] = await DB.query(
         `SELECT
           blocks_audits.version,
+          blocks_audits.template_algo as templateAlgorithm,
           blocks_audits.height,
           blocks_audits.hash as id,
           UNIX_TIMESTAMP(blocks_audits.time) as timestamp,
@@ -94,7 +100,7 @@ class BlocksAuditRepositories {
         JOIN blocks_templates ON blocks_templates.id = blocks_audits.hash
         WHERE blocks_audits.hash = ?
       `, [hash]);
-      
+
       if (rows.length) {
         rows[0].unseenTxs = JSON.parse(rows[0].unseenTxs);
         rows[0].missingTxs = JSON.parse(rows[0].missingTxs);
@@ -115,6 +121,24 @@ class BlocksAuditRepositories {
     }
   }
 
+  /** @asyncSafe */
+  public async $getBlockTemplateAlgo(hash: string): Promise<TemplateAlgorithm | null> {
+    try {
+      const [rows]: any[] = await DB.query(
+        `SELECT template_algo FROM blocks_audits WHERE hash = ?`,
+        [hash]
+      );
+      if (rows.length) {
+        return rows[0].template_algo as TemplateAlgorithm;
+      }
+      return null;
+    } catch (e: any) {
+      logger.err(`Cannot fetch block template algo from db. Reason: ` + (e instanceof Error ? e.message : e));
+      return null;
+    }
+  }
+
+  /** @asyncSafe */
   public async $getBlockTxAudit(hash: string, txid: string): Promise<TransactionAudit | null> {
     try {
       const blockAudit = await this.$getBlockAudit(hash);
@@ -151,6 +175,7 @@ class BlocksAuditRepositories {
     }
   }
 
+  /** @asyncSafe */
   public async $getBlockAuditScore(hash: string): Promise<AuditScore> {
     try {
       const [rows]: any[] = await DB.query(
@@ -165,6 +190,7 @@ class BlocksAuditRepositories {
     }
   }
 
+  /** @asyncSafe */
   public async $getBlockAuditScores(maxHeight: number, minHeight: number): Promise<AuditScore[]> {
     try {
       const [rows]: any[] = await DB.query(
@@ -179,6 +205,7 @@ class BlocksAuditRepositories {
     }
   }
 
+  /** @asyncSafe */
   public async $getBlocksWithoutSummaries(): Promise<string[]> {
     try {
       const [fromRows]: any[] = await DB.query(`
@@ -207,6 +234,7 @@ class BlocksAuditRepositories {
 
   /**
    * [INDEXING] Migrate audits from v0 to v1
+   * @asyncSafe
    */
   public async $migrateAuditsV0toV1(): Promise<void> {
     try {

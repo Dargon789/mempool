@@ -6,6 +6,8 @@ import icons from './icons';
 import { handleError } from '../../utils/api';
 import PricesRepository from '../../repositories/PricesRepository';
 
+const PROXY_PATH_SEGMENT_REGEX = /^(?!\.{1,2}$)[^\p{Cc}/?#\\]{1,256}$/u;
+
 class LiquidRoutes {
   public initRoutes(app: Application) {
     app
@@ -14,7 +16,7 @@ class LiquidRoutes {
       .get(config.MEMPOOL.API_URL_PREFIX + 'asset/:assetId/icon', this.getLiquidIcon)
       .get(config.MEMPOOL.API_URL_PREFIX + 'assets/group/:id', this.$getAssetGroup)
       ;
-    
+
     if (config.DATABASE.ENABLED) {
       app
         .get(config.MEMPOOL.API_URL_PREFIX + 'liquid/pegs', this.$getElementsPegs)
@@ -68,8 +70,13 @@ class LiquidRoutes {
   }
 
   private async $getAssetGroup(req: Request, res: Response) {
+    if (!PROXY_PATH_SEGMENT_REGEX.test(req.params.id)) {
+      handleError(req, res, 400, 'Invalid asset group id');
+      return;
+    }
+
     try {
-      const response = await axios.get(`${config.EXTERNAL_DATA_SERVER.LIQUID_API}/assets/group/${parseInt(req.params.id, 10)}`,
+      const response = await axios.get(`${config.EXTERNAL_DATA_SERVER.LIQUID_API}/assets/group/${encodeURIComponent(req.params.id)}`,
         { responseType: 'stream', timeout: 10000 });
       response.data.pipe(res);
     } catch (e) {
@@ -262,7 +269,7 @@ class LiquidRoutes {
       res.header('Pragma', 'public');
       res.header('Cache-control', 'public');
       res.setHeader('Expires', new Date(Date.now() + 1000 * 300).toUTCString());
-      if (['testnet', 'signet', 'liquidtestnet'].includes(config.MEMPOOL.NETWORK)) {
+      if (['testnet', 'signet', 'liquidtestnet', 'testnet4', 'regtest'].includes(config.MEMPOOL.NETWORK)) {
         handleError(req, res, 400, 'Prices are not available on testnets.');
         return;
       }

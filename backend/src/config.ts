@@ -6,7 +6,7 @@ interface IConfig {
   MEMPOOL: {
     ENABLED: boolean;
     OFFICIAL: boolean;
-    NETWORK: 'mainnet' | 'testnet' | 'signet' | 'liquid' | 'liquidtestnet';
+    NETWORK: 'mainnet' | 'testnet' | 'testnet4' | 'signet' | 'liquid' | 'liquidtestnet' | 'regtest';
     BACKEND: 'esplora' | 'electrum' | 'none';
     HTTP_PORT: number;
     UNIX_SOCKET_PATH: string;
@@ -34,6 +34,8 @@ interface IConfig {
     POOLS_JSON_TREE_URL: string,
     POOLS_UPDATE_DELAY: number,
     AUDIT: boolean;
+    CLUSTER_MEMPOOL: boolean;
+    CLUSTER_MEMPOOL_INDEXING: boolean;
     RUST_GBT: boolean;
     LIMIT_GBT: boolean;
     CPFP_INDEXING: boolean;
@@ -205,6 +207,8 @@ const defaults: IConfig = {
     'POOLS_JSON_TREE_URL': 'https://api.github.com/repos/mempool/mining-pools/git/trees/master',
     'POOLS_UPDATE_DELAY': 604800, // in seconds, default is one week
     'AUDIT': false,
+    'CLUSTER_MEMPOOL': false,
+    'CLUSTER_MEMPOOL_INDEXING': false,
     'RUST_GBT': true,
     'LIMIT_GBT': false,
     'CPFP_INDEXING': false,
@@ -398,7 +402,7 @@ class Config implements IConfig {
       });
       return next;
     });
-  }
+  };
 }
 
 export default new Config();

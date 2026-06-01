@@ -27,6 +27,7 @@ import { AmountShortenerPipe } from '@app/shared/pipes/amount-shortener.pipe';
       z-index: 99;
     }
   `],
+  standalone: false,
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class HashrateChartComponent implements OnInit {
@@ -163,7 +164,7 @@ export class HashrateChartComponent implements OnInit {
             diffIndex++;
           }
 
-          let maResolution = 15;
+          const maResolution = 15;
           const hashrateMa = [];
           for (let i = maResolution - 1; i < data.hashrates.length; ++i) {
             let avg = 0;
@@ -257,7 +258,7 @@ export class HashrateChartComponent implements OnInit {
             if (tick.seriesIndex === 0) { // Hashrate
               hashrateString = `${tick.marker} ${tick.seriesName}: ${this.amountShortenerPipe.transform(tick.data[1], 3, 'H/s', false, true)}<br>`;
             } else if (tick.seriesIndex === 1) { // Difficulty
-              let difficulty = tick.data[1];
+              const difficulty = tick.data[1];
               if (difficulty === null) {
                 difficultyString = `${tick.marker} ${tick.seriesName}: No data<br>`;
               } else {
@@ -291,7 +292,7 @@ export class HashrateChartComponent implements OnInit {
             name: $localize`:@@79a9dc5b1caca3cbeb1733a19515edacc5fc7920:Hashrate`,
             inactiveColor: 'rgb(110, 112, 121)',
             textStyle: {
-              color: 'white',
+              color: 'var(--fg)',
             },
             icon: 'roundRect',
             itemStyle: {
@@ -302,7 +303,7 @@ export class HashrateChartComponent implements OnInit {
             name: $localize`:@@25148835d92465353fc5fe8897c27d5369978e5a:Difficulty`,
             inactiveColor: 'rgb(110, 112, 121)',
             textStyle: {
-              color: 'white',
+              color: 'var(--fg)',
             },
             icon: 'roundRect',
           },
@@ -310,7 +311,7 @@ export class HashrateChartComponent implements OnInit {
             name: $localize`Hashrate (MA)`,
             inactiveColor: 'rgb(110, 112, 121)',
             textStyle: {
-              color: 'white',
+              color: 'var(--fg)',
             },
             icon: 'roundRect',
             itemStyle: {
@@ -360,7 +361,7 @@ export class HashrateChartComponent implements OnInit {
               return value.min;
             }
             const selectedPowerOfTen: any = selectPowerOfTen(firstYAxisMin);
-            const newMin = Math.floor(firstYAxisMin / selectedPowerOfTen.divider / 10)
+            const newMin = Math.floor(firstYAxisMin / selectedPowerOfTen.divider / 10);
             return 600 / 2 ** 32 * newMin * selectedPowerOfTen.divider * 10;
           },
           max: (value) => {

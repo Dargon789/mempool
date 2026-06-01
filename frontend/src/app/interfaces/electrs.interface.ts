@@ -1,5 +1,6 @@
 import { Price } from '@app/services/price.service';
 import { IChannel } from '@interfaces/node-api.interface';
+import { ParsedTaproot } from '../shared/transaction.utils';
 
 export interface Transaction {
   txid: string;
@@ -80,6 +81,8 @@ export interface Vin {
   isInscription?: boolean;
   // temporary field for extracted raw simplicity scripts
   inner_simplicityscript?: string;
+  // parsed taproot info
+  taprootInfo?: ParsedTaproot;
 }
 
 interface Issuance {
@@ -203,6 +206,10 @@ export interface Asset {
   status: Status;
   chain_stats: AssetStats;
   mempool_stats: AssetStats;
+  name?: string;
+  ticker?: string;
+  precision?: number;
+  entity?: Entity;
 }
 
 export interface AssetExtended extends Asset {
@@ -216,6 +223,15 @@ export interface AssetExtended extends Asset {
 
 export interface Entity {
   domain: string;
+}
+
+export interface AssetRegistryItem {
+  asset_id: string;
+  name: string;
+  ticker?: string;
+  precision?: number;
+  domain?: string;
+  entity?: Entity;
 }
 
 interface IssuanceTxin {
