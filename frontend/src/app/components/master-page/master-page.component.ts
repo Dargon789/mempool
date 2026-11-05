@@ -7,6 +7,8 @@ import { EnterpriseService } from '@app/services/enterprise.service';
 import { NavigationService } from '@app/services/navigation.service';
 import { MenuComponent } from '@components/menu/menu.component';
 import { StorageService } from '@app/services/storage.service';
+import { AuthServiceMempool } from '@app/services/auth.service';
+import { WalletAccessService } from '@app/services/wallet-access.service';
 
 @Component({
   selector: 'app-master-page',
@@ -20,6 +22,7 @@ export class MasterPageComponent implements OnInit, OnDestroy {
 
   env: Env;
   network$: Observable<string>;
+  walletAvailable$: Observable<boolean>;
   connectionState$: Observable<number>;
   navCollapsed = false;
   isMobile = window.innerWidth <= 767.98;
@@ -37,6 +40,7 @@ export class MasterPageComponent implements OnInit, OnDestroy {
 
   enterpriseInfo: any;
   enterpriseInfo$: Subscription;
+  authSubscription$: Subscription;
 
   @ViewChild(MenuComponent)
   public menuComponent!: MenuComponent;
@@ -47,11 +51,18 @@ export class MasterPageComponent implements OnInit, OnDestroy {
     private enterpriseService: EnterpriseService,
     private navigationService: NavigationService,
     private storageService: StorageService,
+    private authService: AuthServiceMempool,
     private router: Router,
+    private walletAccessService: WalletAccessService,
   ) { }
+
+  walletRunsOn(network: string): boolean {
+    return this.walletAccessService.runsOn(network);
+  }
 
   ngOnInit(): void {
     this.env = this.stateService.env;
+    this.walletAvailable$ = this.walletAccessService.walletAvailable$;
     this.connectionState$ = this.stateService.connectionState$;
     this.network$ = merge(of(''), this.stateService.networkChanged$);
     this.urlLanguage = this.languageService.getLanguageForUrl();
@@ -73,10 +84,13 @@ export class MasterPageComponent implements OnInit, OnDestroy {
     });
 
     this.servicesEnabled = this.officialMempoolSpace && this.stateService.env.ACCELERATOR === true && this.stateService.network === '';
-    this.refreshAuth();
+    this.authSubscription$ = this.authService.getAuth$().subscribe((auth) => {
+      this.user = auth?.user ?? null;
+    });
 
-    const isServicesPage = this.router.url.includes('/services/');
+    const isServicesPage = this.router.url.includes('/services/') && !this.router.url.includes('/services/admin/serverstats');
     this.menuOpen = isServicesPage && !this.isSmallScreen();
+    this.stateService.menuOpen$.next(this.menuOpen);
     this.setDropdownVisibility();
   }
 
@@ -132,11 +146,15 @@ export class MasterPageComponent implements OnInit, OnDestroy {
 
   menuToggled(isOpen: boolean): void {
     this.menuOpen = isOpen;
+    this.stateService.menuOpen$.next(isOpen);
   }
 
   ngOnDestroy(): void {
     if (this.enterpriseInfo$) {
       this.enterpriseInfo$.unsubscribe();
+    }
+    if (this.authSubscription$) {
+      this.authSubscription$.unsubscribe();
     }
   }
 

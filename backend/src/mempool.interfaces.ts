@@ -278,6 +278,7 @@ export const TransactionFlags = {
   cpfp_parent:                               0b00000001_00000000_00000000n,
   cpfp_child:                                0b00000010_00000000_00000000n,
   replacement:                               0b00000100_00000000_00000000n,
+  acceleration:                              0b00001000_00000000_00000000n,
   // data
   op_return:                        0b00000001_00000000_00000000_00000000n,
   fake_pubkey:                      0b00000010_00000000_00000000_00000000n,
@@ -319,6 +320,7 @@ export interface BlockExtension {
   coinbaseAddresses: string[] | null;
   coinbaseSignature: string | null;
   coinbaseSignatureAscii: string | null;
+  coinbaseBip54: boolean | null;
   virtualSize: number;
   avgTxSize: number;
   totalInputs: number;

@@ -6,6 +6,7 @@ import { Common } from '../api/common';
 import PoolsRepository from './PoolsRepository';
 import HashratesRepository from './HashratesRepository';
 import { RowDataPacket } from 'mysql2';
+import { PoolConnection } from 'mysql2/promise';
 import BlocksSummariesRepository from './BlocksSummariesRepository';
 import DifficultyAdjustmentsRepository from './DifficultyAdjustmentsRepository';
 import bitcoinClient from '../api/bitcoin/bitcoin-client';
@@ -61,6 +62,7 @@ interface DatabaseBlock {
   totalInputAmt: number;
   firstSeen: string; // UNIX_TIMESTAMP() returns a string when applied to datetime(6)
   stale: boolean;
+  coinbaseBip54: boolean | null;
 }
 
 const BLOCK_DB_FIELDS = `
@@ -92,6 +94,7 @@ const BLOCK_DB_FIELDS = `
   blocks.coinbase_addresses AS coinbaseAddresses,
   blocks.coinbase_signature AS coinbaseSignature,
   blocks.coinbase_signature_ascii AS coinbaseSignatureAscii,
+  blocks.coinbase_bip_54 AS coinbaseBip54,
   blocks.avg_tx_size AS avgTxSize,
   blocks.total_inputs AS totalInputs,
   blocks.total_outputs AS totalOutputs,
@@ -132,7 +135,7 @@ class BlocksRepository {
         total_inputs,       total_outputs,            total_input_amt,   total_output_amt,
         fee_percentiles,    segwit_total_txs,         segwit_total_size, segwit_total_weight,
         median_fee_amt,     coinbase_signature_ascii, definition_hash,   index_version,
-        stale,              first_seen
+        stale,              first_seen,               coinbase_bip_54
       ) VALUE (
         ?, ?, FROM_UNIXTIME(?), ?,
         ?, ?, ?, ?,
@@ -144,7 +147,7 @@ class BlocksRepository {
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
-        ?, FROM_UNIXTIME(?)
+        ?, FROM_UNIXTIME(?), ?
       )`;
 
       const poolDbId = await PoolsRepository.$getPoolByUniqueId(block.extras.pool.id);
@@ -194,7 +197,8 @@ class BlocksRepository {
         poolsUpdater.currentSha,
         BlocksRepository.version,
         (block.stale ? 1 : 0),
-        block.extras.firstSeen === null ? 1 : block.extras.firstSeen // Sentinel value 1 indicates that we could not find first seen time
+        block.extras.firstSeen === null ? 1 : block.extras.firstSeen, // Sentinel value 1 indicates that we could not find first seen time
+        block.extras.coinbaseBip54 ?? null
       ];
 
       await DB.query(query, params);
@@ -773,14 +777,16 @@ class BlocksRepository {
    */
   public async $getHistoricalBlockFees(div: number, interval: string | null, timespan?: {from: number, to: number}): Promise<any> {
     try {
+      const withPrices = Common.blockPricesIndexingEnabled();
+
       let query = `SELECT
         CAST(AVG(blocks.height) as INT) as avgHeight,
         CAST(AVG(UNIX_TIMESTAMP(blockTimestamp)) as INT) as timestamp,
-        CAST(AVG(fees) as INT) as avgFees,
-        prices.USD
-        FROM blocks
+        CAST(AVG(fees) as INT) as avgFees${withPrices ? `,
+        prices.USD` : ''}
+        FROM blocks${withPrices ? `
         JOIN blocks_prices on blocks_prices.height = blocks.height
-        JOIN prices on prices.id = blocks_prices.price_id
+        JOIN prices on prices.id = blocks_prices.price_id` : ''}
         WHERE stale = 0
       `;
 
@@ -806,14 +812,16 @@ class BlocksRepository {
    */
   public async $getHistoricalBlockRewards(div: number, interval: string | null): Promise<any> {
     try {
+      const withPrices = Common.blockPricesIndexingEnabled();
+
       let query = `SELECT
         CAST(AVG(blocks.height) as INT) as avgHeight,
         CAST(AVG(UNIX_TIMESTAMP(blockTimestamp)) as INT) as timestamp,
-        CAST(AVG(reward) as INT) as avgRewards,
-        prices.USD
-        FROM blocks
+        CAST(AVG(reward) as INT) as avgRewards${withPrices ? `,
+        prices.USD` : ''}
+        FROM blocks${withPrices ? `
         JOIN blocks_prices on blocks_prices.height = blocks.height
-        JOIN prices on prices.id = blocks_prices.price_id
+        JOIN prices on prices.id = blocks_prices.price_id` : ''}
         WHERE stale = 0
       `;
 
@@ -835,18 +843,22 @@ class BlocksRepository {
    * Get the historical averaged block fee rate percentiles
    * @asyncSafe
    */
-   public async $getHistoricalBlockFeeRates(div: number, interval: string | null): Promise<any> {
+   public async $getHistoricalBlockFeeRates(div: number, interval: string | null, precise = false): Promise<any> {
     try {
+      const avgFee = (index: number): string => precise
+        ? `ROUND(AVG(JSON_EXTRACT(fee_span, '$[${index}]')), 3)`
+        : `CAST(AVG(JSON_EXTRACT(fee_span, '$[${index}]')) as INT)`;
+
       let query = `SELECT
         CAST(AVG(height) as INT) as avgHeight,
         CAST(AVG(UNIX_TIMESTAMP(blockTimestamp)) as INT) as timestamp,
-        CAST(AVG(JSON_EXTRACT(fee_span, '$[0]')) as INT) as avgFee_0,
-        CAST(AVG(JSON_EXTRACT(fee_span, '$[1]')) as INT) as avgFee_10,
-        CAST(AVG(JSON_EXTRACT(fee_span, '$[2]')) as INT) as avgFee_25,
-        CAST(AVG(JSON_EXTRACT(fee_span, '$[3]')) as INT) as avgFee_50,
-        CAST(AVG(JSON_EXTRACT(fee_span, '$[4]')) as INT) as avgFee_75,
-        CAST(AVG(JSON_EXTRACT(fee_span, '$[5]')) as INT) as avgFee_90,
-        CAST(AVG(JSON_EXTRACT(fee_span, '$[6]')) as INT) as avgFee_100
+        ${avgFee(0)} as avgFee_0,
+        ${avgFee(1)} as avgFee_10,
+        ${avgFee(2)} as avgFee_25,
+        ${avgFee(3)} as avgFee_50,
+        ${avgFee(4)} as avgFee_75,
+        ${avgFee(5)} as avgFee_90,
+        ${avgFee(6)} as avgFee_100
       FROM blocks
       WHERE stale = 0`;
 
@@ -1137,12 +1149,12 @@ class BlocksRepository {
    * @param poolId
    * @asyncSafe
    */
-  public async $savePool(id: string, poolId: number): Promise<void> {
+  public async $savePool(id: string, poolId: number, connection?: PoolConnection): Promise<void> {
     try {
       await DB.query(`
         UPDATE blocks SET pool_id = ?, definition_hash = ?
         WHERE hash = ?`,
-        [poolId, poolsUpdater.currentSha, id]
+        [poolId, poolsUpdater.currentSha, id], 'debug', connection
       );
     } catch (e) {
       logger.err(`Cannot update block pool. Reason: ` + (e instanceof Error ? e.message : e));
@@ -1294,6 +1306,7 @@ class BlocksRepository {
     extras.utxoSetSize = dbBlk.utxoSetSize;
     extras.totalInputAmt = dbBlk.totalInputAmt;
     extras.virtualSize = dbBlk.weight / 4.0;
+    extras.coinbaseBip54 = dbBlk.coinbaseBip54;
 
     extras.firstSeen = null;
     if (config.CORE_RPC.DEBUG_LOG_PATH) {
@@ -1425,6 +1438,43 @@ class BlocksRepository {
       throw e;
     }
     return blocksMigrated;
+  }
+
+  /** @asyncSafe */
+  public async $getBlocksMissingBip54Tag(): Promise<{id: string, height: number, timestamp: number}[]> {
+    const timeFirstMainnetBip54Coinbase = 1771507776;
+    const query = `SELECT 
+    hash as id, 
+    height,
+    UNIX_TIMESTAMP(blocks.blockTimestamp) AS timestamp
+    FROM blocks
+    where coinbase_bip_54 IS NULL AND
+    stale = 0 AND
+    height > 0 AND
+    blockTimestamp >= FROM_UNIXTIME(${timeFirstMainnetBip54Coinbase})
+    ORDER BY height DESC`;
+
+    try {
+      const [blocks]: any[] = await DB.query(query);
+
+      return blocks;
+    } catch (e) {
+      logger.err(`Cannot get blocks with missing bip54 flag. Reason: ` + (e instanceof Error ? e.message : e));
+    }
+
+    return [];
+  }
+
+  public async $updateCoinbaseBip54(result: boolean, hash: string): Promise<void> {
+    const query = `UPDATE blocks SET coinbase_bip_54 = ? WHERE hash = ?`;
+    const params = [result, hash];
+
+    try {
+      await DB.query(query, params);
+    } catch (e) {
+      logger.err(`Couldn't update coinbaseBip54 field for block ${hash}. Reason: ` + (e instanceof Error ? e.message : e));
+      throw e;
+    }
   }
 }
 
